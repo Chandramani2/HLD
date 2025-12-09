@@ -52,6 +52,24 @@ sequenceDiagram
     
     API-->>C: 200 OK { "status": "success", "tx_id": 99 }
 ```
+The sequence diagram splits the flow into two distinct scenarios: **The Happy Path** and the **Replay Path**.
+### Scenario 1: The First Successful Request (Steps 1-4)
+* **Step 1 (Atomic Lock):** The API calls `SETNX` (Set if Not Exists) to Redis.
+    * *Visual:* `API -> Redis: SETNX "UUID-1" "PROCESSING"`
+    * *Logic:* This is the critical gate. If Redis returns `1` (True), we own the lock. We set a 24h TTL (Time-To-Live) here to prevent deadlocks if the server crashes.
+* **Step 2 (Business Logic):** The API executes the actual transaction in the Database.
+    * *Visual:* `API -> DB: BEGIN TRANSACTION ... COMMIT`
+    * *Logic:* This is the "Point of No Return." Once the DB commits, the money is moved.
+* **Step 3 (Update State):** We overwrite the Redis key.
+    * *Visual:* `API -> Redis: SET "UUID-1" { ...JSON... }`
+    * *Logic:* We replace the placeholder string `"PROCESSING"` with the actual final result.
+* **Step 4 (Response):** The client gets the 200 OK.
+
+### Scenario 2: The Duplicate / Replay Request
+* **The Trigger:** The client sends the exact same `Key: UUID-1`.
+* **The Check:** The API queries Redis (`GET`).
+* **The Result:** Redis returns the JSON object saved in Step 3.
+* **The Action:** The API sees the data is already there. It **skips** the Database entirely and returns the JSON immediately.
 
 ---
 
@@ -59,40 +77,42 @@ sequenceDiagram
 This diagram shows where the Idempotency Middleware sits in the system to protect the database.
 
 ```mermaid
-graph TD
+flowchart TD
     %% Nodes
-    User[Client / Mobile App]
-    LB[Load Balancer]
-    API[Payment Service]
+    User["Client / Mobile App"]
+    LB["Load Balancer"]
+    API["Payment Service"]
     
-    subgraph "Application Layer"
-        IDEM[Idempotency Middleware]
-        Logic[Business Controller]
+    subgraph AppLayer ["Application Layer"]
+        direction TB
+        IDEM["Idempotency Middleware"]
+        Logic["Business Controller"]
     end
     
-    subgraph "Data Layer"
-        Redis[(Redis Cache)]
-        DB[(PostgreSQL Primary)]
+    subgraph DataLayer ["Data Layer"]
+        direction TB
+        Redis[("Redis Cache")]
+        DB[("PostgreSQL Primary")]
     end
 
     %% Flow
-    User -->|1. POST /charge (Key: ABC)| LB
+    User -->|"1. POST /charge (Key: ABC)"| LB
     LB --> API
     API --> IDEM
     
     %% Logic Decision Tree
-    IDEM -->|2. SETNX (Lock)| Redis
+    IDEM -->|"2. SETNX (Lock)"| Redis
     
-    Redis -- "Lock Success (1)" --> Logic
-    Redis -- "Lock Failed (Processing)" --> ReturnWait[Return 429 Retry]
-    Redis -- "Key Exists (JSON)" --> ReturnCache[Return Saved JSON]
+    Redis -->|"Lock Success (1)"| Logic
+    Redis -->|"Lock Failed (Processing)"| ReturnWait["Return 429 Retry"]
+    Redis -->|"Key Exists (JSON)"| ReturnCache["Return Saved JSON"]
     
     %% Business Logic Execution
-    Logic -->|3. ACID Transaction| DB
-    Logic -->|4. Update Key with Result| Redis
+    Logic -->|"3. ACID Transaction"| DB
+    Logic -->|"4. Update Key with Result"| Redis
     
     %% Returns
-    Logic --> ReturnFinal[200 OK]
+    Logic --> ReturnFinal["200 OK"]
     ReturnWait -.-> User
     ReturnCache -.-> User
     ReturnFinal --> User
@@ -101,6 +121,18 @@ graph TD
     style Redis fill:#ffaaaa,stroke:#333,stroke-width:2px
     style IDEM fill:#aaffaa,stroke:#333,stroke-width:2px
 ```
+The Flowchart shows how the **Idempotency Middleware** acts as a shield for the Database.
+
+* **Load Balancer (LB):** Distributes traffic. It does *not* handle idempotency; it simply passes the `Idempotency-Key` header through.
+* **Idempotency Middleware (The Shield):**
+    * This component sits *before* the Controller.
+    * It communicates **only** with Redis initially. It does not touch the SQL DB yet.
+    * This ensures that high-volume duplicate spam (e.g., a button mashing user) is rejected at the cache layer (sub-millisecond latency) without bogging down the expensive SQL connections.
+* **Redis (The State Store):**
+    * Acts as the "Lock Manager." It holds the temporary state.
+* **PostgreSQL (The Truth):**
+    * Only receives traffic if the Middleware allows it.
+    * **Safety Net:** The DB also has a `UNIQUE(idempotency_key)` constraint. If Redis fails (e.g., flush/crash) and lets a duplicate through, the DB acts as the final hard barrier and rejects the insert.
 
 ---
 
@@ -116,6 +148,9 @@ graph TD
     * When the "Second" request hits the DB, the DB throws a `UniqueConstraintViolation` exception.
     * The API catches this exception, queries the order by the Key, and repairs the Redis state/returns the success response.
     * *Takeaway: Redis is for speed; The Database is for final consistency.*
+4.  **What if Step 3 (Redis Update) fails?** If the DB commits, but the Redis update fails, the key remains stuck in `"PROCESSING"` (or expires).
+     * **Correction:** When the user retries, the system might try to process it again.
+     * **Defense:** The **Database Unique Constraint** will catch this second attempt. The code catch block must handle `UniqueViolationException`, fetch the existing order from the DB, repair the Redis cache, and return success.
 
 # Detailed Explanation: Idempotency Design & Logic
 
