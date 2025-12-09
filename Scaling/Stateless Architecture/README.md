@@ -5,6 +5,8 @@
 
 In a senior interview, you must demonstrate how to decouple **Compute** from **State**. If I shoot one of your web servers, no user should be logged out, and no file upload should be corrupted.
 
+`Stateless` isn't just about deleting variables. It is the philosophy that allows `Infinite Horizontal Scaling`. You must explain where the state goes (Redis, JWT, S3) and how to handle the "Hidden State" like WebSockets
+
 ---
 
 ## 📖 Table of Contents
