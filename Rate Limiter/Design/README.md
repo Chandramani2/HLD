@@ -2,7 +2,7 @@
 
 ## 1. Overview
 
-A Rate Limiter is a crucial component in distributed systems designed to control the amount of incoming traffic to a service or network. It prevents abuse, ensures fair usage (preventing "noisy neighbors"), and protects backend services from being overwhelmed by unpredictable spikes in traffic.
+A Rate Limiter is a critical component in distributed systems designed to control the amount of incoming traffic to a service. It prevents abuse, ensures fair usage (preventing "noisy neighbors"), and protects backend services from being overwhelmed by unpredictable spikes in traffic.
 
 **Core Architecture Decisions:**
 * **Centralized State:** Uses Redis to hold counters, ensuring consistency across multiple rate limiter instances.
@@ -14,28 +14,35 @@ A Rate Limiter is a crucial component in distributed systems designed to control
 ## 2. Use Case Diagram
 
 ### Explanation
-The Use Case diagram describes the functional scope of the system. It identifies who interacts with the system (Actors) and what they do.
-
-* **Client:** The external entity (user, mobile app, or 3rd party service) sending API requests. They don't explicitly "call" the rate limiter; they just want the API resource.
-* **System Administrator:** The internal user responsible for configuring rules (e.g., "Gold Users get 1000 req/s") and monitoring system health.
+This diagram describes the functional scope of the system.
+* **Actors:** The Client (requesting resources) and the Admin (configuring rules).
+* **Boundary:** The Rate Limiter system encapsulates the logic for checking, policy enforcement, and logging.
 
 ### Diagram
 ```mermaid
-usecase diagram
-    actor "Client" as client
-    actor "System Administrator" as admin
+graph LR
+    %% Actors
+    Client((Client))
+    Admin((Sys Admin))
 
-    package "Rate Limiter System" {
-        usecase "Request API Resource" as UC1
-        usecase "Apply Rate Limit Policies" as UC2
-        usecase "Configure Limit Rules" as UC3
-        usecase "View Metrics & Logs" as UC4
-    }
+    %% System Boundary
+    subgraph "Rate Limiter System"
+        direction TB
+        UC1(Request API Resource)
+        UC2(Apply Rate Limit Policies)
+        UC3(Configure Limit Rules)
+        UC4(View Metrics & Logs)
+    end
 
-    client --> UC1
-    UC1 ..> UC2 : <<include>>
-    admin --> UC3
-    admin --> UC4
+    %% Relationships
+    Client --> UC1
+    UC1 -.->|include| UC2
+    Admin --> UC3
+    Admin --> UC4
+
+    %% Styling
+    classDef actorStyle fill:#f9f,stroke:#333,stroke-width:2px;
+    class Client,Admin actorStyle;
 ```
 
 ---
@@ -43,65 +50,56 @@ usecase diagram
 ## 3. Component Diagram
 
 ### Explanation
-This diagram illustrates the logical building blocks and interfaces. It shows how the Rate Limiter decouples the Gateway from the Rule Configuration and the State Store.
-
-* **API Gateway:** The entry point (e.g., Nginx, Kong, AWS API Gateway). It intercepts traffic and asks the Rate Limiter for permission.
-* **Rate Limiter Service:** A stateless microservice. It fetches rules, calculates the algorithm, and returns `ALLOW` or `DENY`.
-* **Rule Config Service:** A CRUD service managing the policy definitions (stored in a SQL DB or heavy cache).
-* **Distributed State Store (Redis):** The most critical component for synchronization. It holds the "current count" for every user/IP. It must support atomic increment operations.
-* **Metrics Service:** Asynchronously collects data (e.g., "User X was blocked") for analytics and alerting.
+This diagram illustrates the logical building blocks.
+* **API Gateway:** Offloads the decision-making.
+* **Rate Limiter Service:** Stateless decision engine.
+* **Redis:** Stores the ephemeral counters.
+* **Rule Config:** Stores the long-term policies (SQL/Cache).
 
 ### Diagram
 ```mermaid
-componentDiagram
-    component [Client]
+graph TD
+    Client[Client Device]
 
-    package "Edge Layer" {
-        component [API Gateway]
-    }
+    subgraph "Edge Layer"
+        GW[API Gateway]
+    end
 
-    package "Rate Limiting Subsystem" {
-        component [Rate Limiter Service]
-        component [Rule Config Service]
-        database "Distributed State Store\n(Redis Cluster)" as Redis
-    }
+    subgraph "Rate Limiting Subsystem"
+        RL[Rate Limiter Service]
+        Config[Rule Config Service]
+        Redis[("Distributed State Store\n(Redis)")]
+    end
 
-    package "Backend" {
-        component [Target Microservice]
-    }
+    subgraph "Backend System"
+        Microservice[Target Microservice]
+    end
     
-    component [Metrics Service]
+    Metrics[Metrics Service]
 
-    [Client] --> [API Gateway] : HTTPS (REST/GraphQL)
-    [API Gateway] --> [Rate Limiter Service] : gRPC (Low Latency Check)
-    [Rate Limiter Service] --> Redis : TCP (INCR/GET)
-    [Rate Limiter Service] --> [Rule Config Service] : HTTPS (Fetch Policy)
-    [Rate Limiter Service] ..> [Metrics Service] : Async Events (Kafka/SQS)
+    %% Connections
+    Client -- "HTTPS" --> GW
+    GW -- "gRPC (Check)" --> RL
     
-    note right of [API Gateway]
-      Logic:
-      1. Receive Request
-      2. Call Rate Limiter
-      3. If ALLOW -> Forward
-      4. If DENY -> Return 429
-    end note
+    RL -- "TCP (Incr/Get)" --> Redis
+    RL -- "HTTPS (Rules)" --> Config
+    RL -.->|Async Events| Metrics
     
-    [API Gateway] --> [Target Microservice] : HTTPS (Filtered Traffic)
+    GW -- "HTTPS (Allowed)" --> Microservice
+
+    %% Styling
+    style Redis fill:#f9f,stroke:#333,stroke-width:2px,stroke-dasharray: 5 5
 ```
 
 ---
 
-## 4. Sequence Diagram (The Request Flow)
+## 4. Sequence Diagram (Request Flow)
 
 ### Explanation
-This diagram details the dynamic behavior of a single request. This is the **Hot Path**, meaning every millisecond of latency added here slows down the entire application.
-
-**Key Steps:**
-1.  **Check:** The Gateway pauses the request and calls the Rate Limiter.
-2.  **Atomic Op:** The Rate Limiter talks to Redis. It uses Lua scripting or atomic `INCR` to ensure that if two servers check the same user at the same time, the count is accurate (preventing Race Conditions).
-3.  **Decision:**
-    * **Happy Path (Allow):** The Gateway forwards the request to the backend.
-    * **Rejection Path (Deny):** The Gateway immediately returns `429 Too Many Requests` with a `Retry-After` header. The backend is never touched.
+This details the critical "Hot Path".
+1.  **Check:** Gateway calls Rate Limiter.
+2.  **Atomic Op:** Rate Limiter runs a Lua script in Redis.
+3.  **Decision:** Gateway either forwards traffic or returns HTTP 429 immediately.
 
 ### Diagram
 ```mermaid
@@ -145,53 +143,57 @@ sequenceDiagram
 ## 5. Deployment Diagram
 
 ### Explanation
-This diagram maps the software to the physical infrastructure. It emphasizes **High Availability (HA)** and **Scalability**.
-
-* **Load Balancers:** Distribute traffic to prevent any single Gateway or Rate Limiter node from crashing.
-* **Kubernetes Pods:** The Rate Limiter is containerized. If CPU usage spikes, K8s creates more replicas automatically.
-* **Redis Cluster:** A single Redis instance is a Single Point of Failure. In production, we use a Redis Cluster (Sharded) or Sentinel (Primary-Replica) to ensure that if one cache node dies, the counts are preserved or failed over.
-* **Zones:** Ideally, these components are spread across multiple Availability Zones (Data Centers) for disaster recovery.
+This maps the software to the physical cloud infrastructure (AWS/GCP context).
+* **Public Subnet:** Contains the Load Balancer.
+* **Private Subnet:** Contains the application logic (Gateway, Rate Limiter) and Data tiers.
+* **Redis Cluster:** Shows the primary/replica setup for high availability.
 
 ### Diagram
 ```mermaid
-deploymentDiagram
-    node "Client Device" {
-        [Browser / Mobile App]
-    }
+graph TD
+    %% Node: Client
+    subgraph "Client Tier"
+        Browser[Mobile App / Browser]
+    end
 
-    cloud "Public Internet" {
-        [DNS / CDN (Cloudflare)]
-    }
+    %% Cloud Boundary
+    subgraph "Cloud Infrastructure (AWS/GCP)"
+        
+        %% Node: Load Balancer
+        subgraph "Public Subnet"
+            ELB[External Load Balancer]
+        end
 
-    node "Load Balancer (AWS ALB)" as ELB
+        %% Node: App Cluster
+        subgraph "Kubernetes Cluster (App Zone)"
+            GW_Pod[API Gateway Pods]
+            RL_Pod[Rate Limiter Pods]
+        end
 
-    node "Kubernetes Cluster" {
-        node "Namespace: Gateway" {
-            component [API Gateway Pods]
-        }
-        node "Namespace: RateLimiter" {
-            component [Rate Limiter Pods]
-        }
-    }
+        %% Node: Data Tier
+        subgraph "Data Tier (Private Subnet)"
+            Redis_Master[("Redis Master")]
+            Redis_Replica[("Redis Replica")]
+        end
 
-    node "Data Tier (VPC Private Subnet)" {
-        node "Redis Master" {
-            database "Sharded Counters"
-        }
-        node "Redis Replica" {
-            database "Replicated Counters"
-        }
-    }
+        %% Node: Backend
+        subgraph "Backend Services"
+            Target_Svc[Microservices Cluster]
+        end
+    end
 
-    node "Backend Services" {
-        [Microservices Cluster]
-    }
+    %% Network Connections
+    Browser -- "Internet" --> ELB
+    ELB -- "Traffic Dist." --> GW_Pod
+    GW_Pod -- "Internal gRPC" --> RL_Pod
+    RL_Pod -- "Read/Write" --> Redis_Master
+    Redis_Master -.->|Replication| Redis_Replica
+    GW_Pod -- "Forward Traffic" --> Target_Svc
 
-    [Browser / Mobile App] --> [DNS / CDN (Cloudflare)]
-    [DNS / CDN (Cloudflare)] --> ELB : HTTPS
-    ELB --> [API Gateway Pods] : Traffic Distribution
-    [API Gateway Pods] --> [Rate Limiter Pods] : gRPC
-    [Rate Limiter Pods] --> [Redis Master] : Read/Write
-    [Redis Master] ..> [Redis Replica] : Async Replication
-    [API Gateway Pods] --> [Microservices Cluster] : Internal Traffic
+    %% Styling for "Nodes"
+    style ELB fill:#e1f5fe
+    style GW_Pod fill:#e1f5fe
+    style RL_Pod fill:#e1f5fe
+    style Redis_Master fill:#fff9c4
+    style Redis_Replica fill:#fff9c4
 ```
