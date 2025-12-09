@@ -5,6 +5,8 @@
 
 In a senior interview, you must explain why running `KEYS *` is a fireable offense, how **Copy-on-Write** works during snapshots, and how to implement **Distributed Locks** safely.
 
+Redis is never just a "Cache." It is a **Data Structure Store**. You must demonstrate knowledge of **Single-threaded architecture, Persistence trade-offs (RDB vs AOF)**, and **Distributed Locking**
+
 ---
 
 ## 📖 Table of Contents
