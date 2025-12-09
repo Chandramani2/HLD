@@ -298,3 +298,187 @@ return allowed
 | **Bucket Size** | 24 Hours of Credits | ~Seconds/Minutes of traffic |
 | **When Empty** | Throttles to Baseline CPU | Returns HTTP 429 |
 | **Implementation** | Hypervisor (C/C++) | Distributed Redis (Lua) |
+
+
+# 🏁 Solving Race Conditions in Distributed Rate Limiting
+
+> **The Scenario:** You have **100 Application Servers** and **1 Central Redis Instance**.
+> **The Goal:** Enforce a strict rate limit (e.g., 10 requests/second) regardless of which server handles the traffic.
+
+In a distributed system, local memory counters do not work. You must share the state. However, sharing state introduces **latency** and **race conditions**.
+
+---
+
+## 💥 1. The Anatomy of the Race Condition (Read-Modify-Write)
+
+The problem isn't Redis; the problem is **Network Latency**. The "Check-Then-Act" pattern creates a gap where other requests can slip through.
+
+### The Failure Sequence
+Imagine a limit of **1 request allowed**.
+
+1.  **Server A** sends `GET user_123`.
+2.  **Server B** sends `GET user_123` (at the exact same millisecond).
+3.  **Redis** returns `0` to Server A.
+4.  **Redis** returns `0` to Server B.
+5.  **Server A** thinks: "0 < 1. Allowed!" -> Sends `INCR user_123`.
+6.  **Server B** thinks: "0 < 1. Allowed!" -> Sends `INCR user_123`.
+7.  **Final State:** Counter is `2`. **Limit Broken.**
+
+
+
+---
+
+## 🛡️ Solution 1: Atomic Counters (For Fixed Windows)
+
+If your algorithm is simple (e.g., "Max 10 requests per calendar minute"), you do not need to Read-Check-Write. You can do it all in one step.
+
+### The Mechanism
+Redis commands like `INCR` (Increment) are **Atomic**. This means Redis locks the key, increments it, and returns the new value in a single CPU cycle. No other command can interrupt it.
+
+### Implementation (Python Pseudo-code)
+```python
+def is_allowed_fixed_window(user_id, limit):
+    key = f"rate_limit:{user_id}"
+    
+    # INCR returns the new value immediately
+    current_count = redis.incr(key)
+    
+    # If this is the very first request, set the expiry
+    if current_count == 1:
+        redis.expire(key, 60)
+        
+    if current_count > limit:
+        return False
+    return True
+```
+
+### Why this works across 100 Servers
+Even if 100 servers hit `INCR` simultaneously, Redis queues them sequentially.
+1. Server A -> `INCR` -> Redis makes it 1. Returns 1. (Allowed)
+2. Server B -> `INCR` -> Redis makes it 2. Returns 2. (Blocked)
+
+---
+
+## ⚛️ Solution 2: Lua Scripting (For Token Bucket / Sliding Window)
+
+**The Challenge:** Algorithms like **Token Bucket** require complex math:
+1.  Get current tokens.
+2.  Get last refill timestamp.
+3.  Calculate time passed.
+4.  Add new tokens (Refill).
+5.  Check if sufficient tokens exist.
+6.  Decrement tokens.
+
+You cannot do this with `INCR`. If you fetch data to Python/Node.js to do the math, you re-introduce the Race Condition.
+
+### The Solution: "Send Logic to Data"
+We use **Lua Scripting**. Redis allows you to upload a script that executes on the Redis server.
+* **Atomicity:** Redis guarantees that a Lua script runs **atomically**.
+* **Blocking:** While the script runs, no other client (from the 100 servers) can run a command.
+* **Speed:** It happens in memory on the Redis server. Zero network lag between steps.
+
+### Implementation (Token Bucket in Lua)
+
+**The Lua Script (`bucket.lua`):**
+```lua
+-- KEYS[1]: The rate limit key
+-- ARGV[1]: Refill rate (tokens per second)
+-- ARGV[2]: Burst Capacity
+-- ARGV[3]: Current Timestamp
+-- ARGV[4]: Tokens requested (usually 1)
+
+local key = KEYS[1]
+local rate = tonumber(ARGV[1])
+local capacity = tonumber(ARGV[2])
+local now = tonumber(ARGV[3])
+local requested = tonumber(ARGV[4])
+
+-- 1. Fetch current state (Tokens + Last_Refill_Time)
+local state = redis.call("HMGET", key, "tokens", "last_refill")
+local last_tokens = tonumber(state[1])
+local last_refill = tonumber(state[2])
+
+-- Initialize if missing
+if last_tokens == nil then
+    last_tokens = capacity
+    last_refill = now
+end
+
+-- 2. Refill Math
+local delta = math.max(0, now - last_refill)
+local filled_tokens = math.min(capacity, last_tokens + (delta * rate))
+
+-- 3. Check and Consume
+local allowed = false
+if filled_tokens >= requested then
+    filled_tokens = filled_tokens - requested
+    allowed = true
+end
+
+-- 4. Save State atomically
+redis.call("HMSET", key, "tokens", filled_tokens, "last_refill", now)
+redis.call("EXPIRE", key, 60) -- Cleanup
+
+return allowed
+```
+
+**The Application Call:**
+Every one of the 100 servers simply calls this script. They don't know the logic; they just wait for `true` or `false`.
+
+```python
+# The script is atomic. No race condition possible.
+allowed = redis.eval(lua_script, 1, "user:123", rate, capacity, time.time(), 1)
+```
+
+
+
+---
+
+## 📜 Solution 3: Sorted Sets (For Sliding Window Log)
+
+This is the most accurate (and expensive) method. It requires managing a list of timestamps.
+
+### The "Transaction" Problem
+To implement a sliding window, you need to:
+1.  `ZREMRANGEBYSCORE` (Remove logs older than 1 minute).
+2.  `ZCARD` (Count remaining logs).
+3.  `ZADD` (Add current timestamp).
+
+If Server A does Step 2 (Count = 9), and Server B does Step 2 (Count = 9), both will proceed to Step 3, resulting in 11 requests.
+
+### The Fix: Multi/Exec or Lua
+You must wrap these commands in a transaction or Lua script so they happen as a **single unit of work**.
+
+**Lua Implementation:**
+```lua
+local key = KEYS[1]
+local now = tonumber(ARGV[1])
+local window = tonumber(ARGV[2])
+local limit = tonumber(ARGV[3])
+
+-- 1. Clean old requests
+redis.call('ZREMRANGEBYSCORE', key, 0, now - window)
+
+-- 2. Count current
+local count = redis.call('ZCARD', key)
+
+-- 3. Decide
+if count < limit then
+    redis.call('ZADD', key, now, now)
+    redis.call('PEXPIRE', key, window)
+    return 1 -- Allowed
+else
+    return 0 -- Blocked
+end
+```
+
+---
+
+## 🧠 Summary Table
+
+| Method | Algorithm | Atomicity Strategy | Complexity | Performance |
+| :--- | :--- | :--- | :--- | :--- |
+| **`INCR`** | Fixed Window | Native Redis Command | Low | ⭐⭐⭐⭐⭐ (Fastest) |
+| **Lua Script** | Token Bucket | Scripts execute atomically | High | ⭐⭐⭐⭐ |
+| **Lua + ZSET** | Sliding Window | Scripts execute atomically | High | ⭐⭐ (Heavy on RAM) |
+| **Redlock** | Any | Distributed Locking | Very High | ⭐ (Slow, avoid for this) |
