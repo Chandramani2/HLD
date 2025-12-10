@@ -117,14 +117,13 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    Browser[Web Browser] --> Web[Presentation Layer <br/> (Controllers)]
-    Web --> Business[Business Logic Layer <br/> (Services/Rules)]
-    Business --> Persistence[Persistence Layer <br/> (ORM/DAO)]
-    Persistence --> DB[(Database)]
+    Browser["Web Browser"] --> Web["Presentation Layer <br/> (Controllers)"]
+    Web --> Business["Business Logic Layer <br/> (Services/Rules)"]
+    Business --> Persistence["Persistence Layer <br/> (ORM/DAO)"]
+    Persistence --> DB[("Database")]
 
-    %% Strict enforcement
-    Web -.->|Allowed| Business
-    Web -.-x|Forbidden| Persistence
+    %% Strict enforcement - Fixed Syntax
+    Web -.->|"❌ Forbidden (Bypass)"| Persistence
     
     style Business fill:#fff2cc,stroke:#333
 ```
