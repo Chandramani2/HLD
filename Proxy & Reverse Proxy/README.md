@@ -349,3 +349,179 @@ resource "aws_api_gateway_deployment" "MyDeployment" {
   stage_name  = "prod"
 }
 ```
+
+# Securing the Proxy Chain: preventing Direct Access
+
+A common security vulnerability in Proxy/Gateway architectures is **Bypass Attacks**. If a user discovers the IP address of your backend service, they might try to send requests directly to it, bypassing the authentication, logging, or rate-limiting logic inside your Proxy.
+
+This guide details four strategies to ensure **every** request must pass through your Proxy.
+
+## 📋 Strategy Overview
+
+| Strategy | Implementation Level | Security Level | Best For... |
+| :--- | :--- | :--- | :--- |
+| **1. Secret Handshake** | Code (App Level) | ⭐⭐ | Quick fixes, legacy apps without firewalls. |
+| **2. Localhost Binding** | Network Config | ⭐⭐⭐ | Monolithic servers (Proxy & App on same machine). |
+| **3. Docker Networking** | Infrastructure | ⭐⭐⭐⭐⭐ | Containerized environments (Standard). |
+| **4. IP Whitelisting** | Firewall/Cloud | ⭐⭐⭐⭐⭐ | Distributed systems (AWS, separate VMs). |
+
+---
+
+## 🔐 Strategy 1: The "Secret Handshake" (Application Level)
+
+The Proxy injects a secret header (e.g., `X-Internal-Secret`) into the request. The Target Service checks for this header and rejects any request that doesn't have it.
+
+### 🐍 Python (Flask) Target Implementation
+*Modify your Backend Service to check for the header.*
+
+```python
+from flask import Flask, request, abort
+
+app = Flask(__name__)
+
+# This must match the key used in your Proxy
+PROXY_SECRET = "my-super-secure-key"
+
+@app.before_request
+def restrict_direct_access():
+    """
+    Middleware that runs before every request.
+    If the secret header is missing or wrong, return 403 Forbidden.
+    """
+    client_secret = request.headers.get('X-Internal-Secret')
+    
+    if client_secret != PROXY_SECRET:
+        abort(403, description="⛔ Access Denied: You must use the Proxy.")
+
+@app.route('/data')
+def get_data():
+    return "✅ You are authorized!"
+
+if __name__ == '__main__':
+    app.run(port=8080)
+```
+
+### ☕ Java (Spring Boot) Target Implementation
+*Add a Security Filter to intercept requests before they reach the Controller.*
+
+```java
+import org.springframework.stereotype.Component;
+import javax.servlet.*;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import java.io.IOException;
+
+@Component
+public class ProxySecurityFilter implements Filter {
+
+    private final String PROXY_SECRET = "my-super-secure-key";
+
+    @Override
+    public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
+            throws IOException, ServletException {
+        
+        HttpServletRequest req = (HttpServletRequest) request;
+        HttpServletResponse res = (HttpServletResponse) response;
+
+        // Check for the header injected by the Proxy
+        String clientSecret = req.getHeader("X-Gateway-Auth");
+
+        if (PROXY_SECRET.equals(clientSecret)) {
+            // ✅ Authorized: Continue to controller
+            chain.doFilter(request, response);
+        } else {
+            // ⛔ Unauthorized: Block request
+            res.sendError(HttpServletResponse.SC_FORBIDDEN, "Access Denied: Direct Access Prohibited");
+        }
+    }
+}
+```
+
+---
+
+## 🐳 Strategy 2: Docker Internal Networks
+
+If you use Docker, this is the cleanest solution. You create a private network that isn't exposed to the host machine.
+
+**Concept:**
+* **Proxy Container:** Ports mapped to Host (Public).
+* **Target Container:** NO ports mapped to Host (Private).
+
+```yaml
+version: '3'
+services:
+  # 1. The Proxy (Publicly Accessible)
+  my-proxy:
+    image: my-python-proxy
+    ports:
+      - "80:5000" # Maps Host Port 80 -> Container Port 5000
+    networks:
+      - internal-net
+
+  # 2. The Target Service (Hidden)
+  my-target:
+    image: my-java-service
+    # ⛔ CRITICAL: Do NOT add a 'ports' section here.
+    # This ensures port 8080 is unreachable from the internet.
+    networks:
+      - internal-net
+
+networks:
+  internal-net:
+    driver: bridge
+```
+
+---
+
+## 🧱 Strategy 3: Firewall / Security Groups
+
+If your services run on different servers (e.g., AWS EC2, DigitalOcean Droplets), use network firewalls.
+
+### Logical Flow
+
+```mermaid
+graph LR
+    User((User)) -- "1. Request" --> Proxy[Proxy Server]
+    Proxy -- "2. Forward (Allowed)" --> Firewall{Firewall}
+    User -- "3. Direct Attempt (Blocked)" --> Firewall
+    
+    subgraph Target Server
+        Firewall -- "Allow IP: 10.0.0.5" --> App[Backend App]
+        Firewall -- "Deny All Others" --> Drop[🗑️ Drop Packet]
+    end
+    
+    style Drop fill:#f96,stroke:#333,stroke-width:2px
+    style Firewall fill:#bbf,stroke:#333,stroke-width:2px
+```
+
+### Configuration Example (AWS Security Groups)
+
+1.  **Security Group A (Attached to Proxy):**
+    * **Inbound:** Allow port `80/443` from `0.0.0.0/0` (Anywhere).
+    * **Outbound:** Allow All.
+
+2.  **Security Group B (Attached to Backend):**
+    * **Inbound:** Allow port `8080` **ONLY** from `Source: Security Group A`.
+    * **Inbound:** Deny All from `0.0.0.0/0`.
+
+---
+
+## 🏠 Strategy 4: Localhost Binding
+
+If both the Proxy and the App run on the **same physical server**, you can bind the backend app to `localhost` (127.0.0.1).
+
+* **Public IP (0.0.0.0):** Accessible by the internet.
+* **Loopback IP (127.0.0.1):** Accessible ONLY by processes on the same machine.
+
+**Python Configuration:**
+```python
+# Only the local proxy can see this
+app.run(host='127.0.0.1', port=8080)
+```
+
+**Java Configuration (`application.properties`):**
+```properties
+server.address=127.0.0.1
+server.port=8080
+```
+
