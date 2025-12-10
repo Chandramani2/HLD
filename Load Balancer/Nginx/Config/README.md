@@ -117,3 +117,141 @@ upstream backend_servers {
 | `least_conn` | Sends traffic to the idlest server. | Long-running tasks (video encoding, reports). |
 | `ip_hash` | Maps User IP -> Specific Server. | Stateful apps (shopping carts saved on disk). |
 | `max_fails` | Handling crashes. | Preventing traffic to dead servers. |
+
+# 🔀 Nginx Load Balancing Algorithms: The Complete Guide
+
+> **Overview:** Nginx offers several methods to distribute traffic. Choosing the right one depends on your application type (Stateful vs. Stateless) and your infrastructure (Equal vs. Unequal servers).
+
+Below is the complete list of algorithms available in Nginx Open Source and Nginx Plus.
+
+---
+
+## 1. Standard Algorithms (Open Source) 🆓
+These are available in the free version of Nginx and cover 95% of use cases.
+
+### A. Round Robin (The Default) 🔄
+**How it works:** Requests are distributed sequentially. Request 1 goes to Server A, Request 2 to Server B, Request 3 to Server C, then back to A.
+
+**Best for:** Servers with identical specifications and stateless applications.
+
+```nginx
+upstream backend {
+    # No directive needed; this is default
+    server 10.0.0.1;
+    server 10.0.0.2;
+}
+```
+
+### B. Least Connections (`least_conn`) 📉
+**How it works:** Sends the new request to the server with the **fewest active connections**.
+
+**Best for:** Requests that take varying times to complete (e.g., file uploads, video encoding). It prevents a single server from getting bogged down by heavy tasks.
+
+```nginx
+upstream backend {
+    least_conn;
+    server 10.0.0.1;
+    server 10.0.0.2;
+}
+```
+
+### C. IP Hash (`ip_hash`) 📌
+**How it works:** Calculates a hash based on the client's IP address. A specific user IP will **always** reach the same backend server (unless that server goes down).
+
+**Best for:** "Sticky Sessions" where session data is stored locally on the server RAM.
+
+```nginx
+upstream backend {
+    ip_hash;
+    server 10.0.0.1;
+    server 10.0.0.2;
+}
+```
+
+### D. Generic Hash (`hash`) 🔑
+**How it works:** A more flexible version of IP Hash. You can hash **any** variable (User-Agent, Cookie, Request URI).
+
+**Best for:** Cache sharding. For example, hashing the `request_uri` ensures that the same image URL always goes to the same server (maximizing cache hits).
+
+```nginx
+upstream backend {
+    # Hash based on the URL
+    hash $request_uri consistent;
+    server 10.0.0.1;
+    server 10.0.0.2;
+}
+```
+*Note: The `consistent` flag uses Consistent Hashing (Ring Hashing) to minimize reshuffling if a server is added/removed.*
+
+### E. Random (`random`) 🎲
+**How it works:** Picks a server at random.
+
+**Best for:** Distributed systems where you have a very large number of upstream servers and the load is generally uniform.
+
+```nginx
+upstream backend {
+    # Pick 2 random servers, then choose the one with least connections
+    random two least_conn; 
+    server 10.0.0.1;
+    server 10.0.0.2;
+    server 10.0.0.3;
+    server 10.0.0.4;
+}
+```
+
+---
+
+## 2. Premium Algorithms (Nginx Plus Only) 💰
+These require a paid subscription.
+
+### A. Least Time (`least_time`) ⏱️
+**How it works:** Calculates the average response time of each server and sends traffic to the fastest one.
+
+**Best for:** Latency-sensitive applications where milliseconds matter.
+
+```nginx
+upstream backend {
+    # header = Time to first byte
+    # last_byte = Time to full response
+    least_time header inflight;
+    server 10.0.0.1;
+    server 10.0.0.2;
+}
+```
+
+---
+
+## 3. The Power Modifiers (Can apply to ANY algorithm) ⚡
+
+These are not algorithms themselves, but settings that tweak how the algorithms work.
+
+### A. Weights (`weight`)
+**Concept:** Server A is a supercomputer; Server B is a laptop. Give A more work.
+
+```nginx
+upstream backend {
+    server 10.0.0.1 weight=3; # Takes 75% of traffic
+    server 10.0.0.2 weight=1; # Takes 25% of traffic
+}
+```
+
+### B. Slow Start (`slow_start`) (Plus Only)
+**Concept:** When a server recovers from a crash, don't flood it instantly. Gradually ramp up traffic over time.
+
+```nginx
+upstream backend {
+    server 10.0.0.1 slow_start=30s;
+}
+```
+
+---
+
+## 📝 Quick Comparison Table
+
+| Algorithm | Type | Use Case |
+| :--- | :--- | :--- |
+| **Round Robin** | Static | Equal servers, simple apps. |
+| **Least Conn** | Dynamic | Long-running tasks, unequal load. |
+| **IP Hash** | Static | Session Persistence (Sticky). |
+| **Generic Hash** | Static | Caching (URL), Header routing. |
+| **Least Time** | Dynamic | High-performance (Paid only). |
