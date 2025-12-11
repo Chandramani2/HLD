@@ -51,7 +51,7 @@ The core of a chat app is the **Gateway Service** that holds open connections.
     * `User_A -> Gateway_01`
     * `User_B -> Gateway_99`
 
-
+![Image](https://github.com/user-attachments/assets/c8eabed3-f73f-4204-9c8a-a37776884b9b)
 
 ---
 
