@@ -18,6 +18,12 @@ At its core, Elasticsearch is a distributed document store built on top of **Apa
     * *Note:* It is *not* yet fully committed to the main disk storage.
 4.  **Flush (Make Durable):** Periodically (or when the Translog gets full), a "Flush" occurs. Segments are `fsync`'ed to the physical disk, and the Translog is cleared.
 
+> The Write Path (Indexing)
+1.  **Coordination:** Request hits a node; node routes it to the correct **Primary Shard**.
+2.  **Memory Buffer:** Document written to memory buffer and **Translog**.
+3.  **Refresh:** Every 1s, buffer is written to a new **Segment** (searchable but not durable).
+4.  **Flush:** Translog is committed, and segments are `fsync`ed to disk.
+
 ### The Read Path (Scatter-Gather)
 1.  **Scatter:** The coordinating node identifies which shards (primary or replica) hold the data.
 2.  **Gather:** Each shard executes the query locally and returns **only Document IDs and Scores** (lightweight) to the coordinating node.
@@ -109,6 +115,13 @@ The Inverted Index is the heart of full-text search. It maps **Terms** to **Docu
     * **Optimization:** It doesn't store raw IDs (e.g., `1, 5, 8, 20`). It uses **Frame of Reference (FOR)** compression (Delta encoding). It stores the *difference* between IDs (e.g., `1, +4, +3, +12`) to save space.
     * **Intersection:** For queries like `match: "fast" AND "car"`, Lucene uses **Roaring Bitmaps** or Skip Lists to quickly find the intersection of two Postings Lists.
 
+Used for `text` and `keyword` fields.
+* **Concept:** Maps terms to the documents containing them (like a book index).
+* **Structure:**
+    1.  **Term Dictionary:** Sorted list of all terms.
+    2.  **Postings List:** List of Doc IDs containing the term.
+    3.  **FST (Finite State Transducer):** An in-memory graph structure that maps term prefixes to their location on disk, reducing memory usage significantly compared to a standard Map.
+
 ---
 
 ### 2. BKD Trees (For Numerics, Dates, Geo)
@@ -119,9 +132,23 @@ The Inverted Index is the heart of full-text search. It maps **Terms** to **Docu
 * **Performance:** It allows Elasticsearch to discard huge chunks of data instantly. If you search for `price > 100`, the BKD tree knows exactly which blocks on disk contain values over 100 and ignores the rest.
 * **Usage:** Used for `long`, `integer`, `double`, `date`, `geo_point`.
 
+* **Concept:** A Block K-Dimensional tree. It adapts the K-D tree logic (splitting space into halves) but optimizes it for disk blocks.
+* **Usage:** Extremely efficient for Range Queries (e.g., `age > 20`) and Geo-spatial queries (e.g., "within 5km").
 ---
 
-### 3. Doc Values (For Sorting & Aggregations)
+## 3. Architecture & Components
+
+| Component | Description |
+| :--- | :--- |
+| **Node** | A single server instance. |
+| **Shard** | A single Lucene instance. An index is split into primary shards. |
+| **Replica** | A copy of a primary shard for high availability and read scaling. |
+| **Segment** | Immutable files on disk that make up a shard. |
+| **Translog** | (Transaction Log) An append-only file ensuring data durability before fsync. |
+
+---
+
+### 4. Doc Values (For Sorting & Aggregations)
 The Inverted Index is great for finding *Docs* from *Terms*. It is terrible at finding *Values* from *Docs* (which is needed for Sorting/Aggregations).
 
 * **The Problem:** To sort by Price, ES would have to "un-invert" the index (scan every term to see if Doc #1 is in it). This is memory-intensive.
@@ -129,6 +156,15 @@ The Inverted Index is great for finding *Docs* from *Terms*. It is terrible at f
 * **Structure:** A fast lookup map of `DocID -> Value`.
 * **Location:** Stored on disk, mapped into memory via the OS Cache.
 * **Benefit:** Allows sorting and aggregating on billions of rows with minimal Heap memory usage.
+
+---
+
+## 5. Configuration (`elasticsearch.yml`)
+* `cluster.name`: Logical name of the cluster.
+* `node.roles`: Define if a node is `master`, `data`, or `ingest`.
+* `bootstrap.memory_lock`: **Crucial.** Set to `true` to disable swapping.
+* `discovery.seed_hosts`: Initial list of nodes for cluster formation.
+* `indices.memory.index_buffer_size`: % of heap used for buffering writes (default 10%).
 
 ---
 
@@ -191,3 +227,84 @@ To scale to Petabytes, you cannot keep all data on expensive NVMe SSDs.
 * The Master kicks the node out of the cluster.
 * This triggers **Shard Rebalancing** (moving TBs of data), which causes an I/O storm, leading to *more* GC pauses on other nodes. It's a cascading failure loop.
 * **Prevention:** Monitor JVM Heap usage. Never allocate more than 30GB to Heap (due to Compressed Oops pointers). Rely on OS Cache for data storage, not Heap."
+
+# Senior Backend Developer Interview Q&A: Elasticsearch
+
+### Internals & Data Structures
+**Q1: What is the difference between an Inverted Index and a Doc Value?**
+**A:**
+* **Inverted Index:** Maps Terms → Document IDs. Optimized for **Search** (finding docs).
+* **Doc Values:** Maps Document IDs → Terms. Columnar storage optimized for **Sorting, Aggregations, and Scripting**.
+
+**Q2: Why are segments immutable, and how does this affect updates?**
+**A:** Immutability allows for lock-free reads and efficient caching. However, it means "updates" are actually "delete + re-index." The old document is marked in a `.del` file, and the new one is written to a new segment. The old data is only physically removed during **Segment Merging**.
+
+**Q3: Explain the "Split Brain" problem and how to prevent it.**
+**A:** Split Brain occurs when a cluster divides into two, and both sub-clusters elect a master, leading to data divergence. In modern ES (7.x+), this is handled automatically via `cluster.initial_master_nodes` and a quorum-based voting system. In older versions, `discovery.zen.minimum_master_nodes` (N/2 + 1) was required.
+
+**Q4: What is the role of the Translog?**
+**A:** Lucene commits are expensive. The Translog (Write Ahead Log) ensures durability. If a node crashes before the in-memory buffer is flushed to disk (fsynced), the Translog is replayed upon restart to recover the data.
+
+**Q5: How does the BKD Tree improve range query performance over Inverted Indexes?**
+**A:** Inverted Indexes are discrete (term-based). For a range `1 to 100`, an inverted index might have to look up 100 separate terms. A BKD tree acts like a spatial index, allowing ES to quickly drill down and select a "block" of numbers, making it significantly faster for numeric ranges.
+
+### Performance & Scaling
+**Q6: Why is Deep Paging (e.g., page 10,000) slow in Elasticsearch?**
+**A:** To fetch results 10,000 to 10,010, each shard must fetch its top 10,010 results. The coordinator node must then collect `number_of_shards * 10,010` results, sort them in memory, and discard the first 10,000. This kills heap memory. **Solution:** Use `search_after` or Scroll API.
+
+**Q7: What is the difference between `keyword` and `text` data types?**
+**A:**
+* **`text`:** Analyzed (tokenized, lowercased). Good for full-text search. Cannot be used for sorting/aggregations (unless `fielddata` is enabled, which is expensive).
+* **`keyword`:** Stored exactly as is. Good for exact filtering, sorting, and aggregations.
+
+**Q8: How do you handle "Hot/Warm" architecture?**
+**A:** Use **Index Lifecycle Management (ILM)**.
+* **Hot:** High-spec SSD nodes for ingestion and recent search.
+* **Warm:** Cheaper HDD nodes for older logs.
+* You use "Node Attributes" (e.g., `node.attr.box_type: hot`) and configure the index to move between them as it ages.
+
+**Q9: What happens when you change the Mapping of an existing field?**
+**A:** You **cannot** change the mapping of an existing field (e.g., changing `integer` to `text`) because the Inverted Index is already built. You must create a new index with the correct mapping and **Reindex** the data.
+
+**Q10: Why would you set `refresh_interval` to `-1` or `30s` during bulk indexing?**
+**A:** The default is `1s`. Creating a new segment every second is expensive. Increasing this interval reduces I/O pressure and segment count, significantly speeding up bulk ingestion.
+
+### Troubleshooting
+**Q11: What does "Red" cluster status mean vs "Yellow"?**
+**A:**
+* **Yellow:** All Primary shards are active, but some Replicas are unassigned (data is available, but not redundant).
+* **Red:** At least one Primary shard is missing. Data is effectively lost or unavailable.
+
+**Q12: How does a "Term Query" differ from a "Match Query"?**
+**A:**
+* **Term:** Exact match. Does **not** analyze the input (looks for exact token in inverted index).
+* **Match:** Analyzes the input (tokenizes it) before searching. Used for full-text search.
+
+**Q13: What is the `_source` field?**
+**A:** It stores the original JSON body sent by the client. It is not indexed but is stored to be returned in search results. Disabling it saves disk space but prevents reindexing or retrieving the original doc.
+
+**Q14: How does the "Coordinator Node" impact memory?**
+**A:** It performs the "Scatter-Gather." If a client requests a huge aggregation or large response size, the Coordinator node must hold all that data in heap before returning it. It is often the OOM bottleneck.
+
+**Q15: What is the "Circuit Breaker" in Elasticsearch?**
+**A:** It is a mechanism to prevent OutOfMemory errors. If a query (e.g., a massive aggregation) is estimated to use more RAM than the limit (e.g., 70% of Heap), the Circuit Breaker trips and aborts the query immediately to save the node.
+
+### Advanced
+**Q16: How does Fuzzy Search work internally?**
+**A:** It uses Levenshtein Distance (Edit Distance). It builds a "Levenshtein Automaton" and intersects it with the Term Dictionary (FST) to efficiently find terms within $N$ edits of the search term.
+
+**Q17: Explain `routing` in Elasticsearch.**
+**A:** By default, ES distributes docs based on `hash(id)`. If you provide a custom `routing` value (e.g., `user_id`), all docs for that user go to the same shard. This makes searching for that user extremely fast (you only query 1 shard instead of all), but can lead to "Data Skew" (Hot Shards).
+
+**Q18: What is the difference between a Filter and a Query context?**
+**A:**
+* **Query:** "How well does this match?" Calculates a **Relevance Score**.
+* **Filter:** "Does this match?" (Yes/No). **No scoring**. Results are **Cached**, making filters faster.
+
+**Q19: What are Nested Objects vs. Parent-Child?**
+**A:**
+* **Nested:** Stores objects as separate hidden documents in the same Lucene block. Fast query, but reindexing the parent requires reindexing all children.
+* **Join (Parent-Child):** Documents are stored separately on the same shard. Slower query (join overhead), but children can be updated independently of the parent.
+
+**Q20: How does NRT (Near Real-Time) search work?**
+**A:** It relies on the filesystem cache. When a segment is written (refreshed), it is opened by a file handle. Even though it hasn't been `fsync`ed to the physical disk platter, the OS cache allows it to be read. This bridges the gap between the memory buffer and the physical disk commit.
