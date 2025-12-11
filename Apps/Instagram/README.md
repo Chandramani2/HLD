@@ -55,7 +55,7 @@ We split the architecture into two flows: **The Upload (Write)** and **The Feed 
 * **Feed Service:** Queries a **Redis Cluster** where the user's feed is pre-computed.
 * **Media:** Fetched from **CDN** (Edge Location).
 
-
+<img width="1848" height="1426" alt="Image" src="https://github.com/user-attachments/assets/5f7663c7-4ff9-4648-aa5a-298aafdcba86" />
 
 ---
 
