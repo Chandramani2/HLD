@@ -36,6 +36,8 @@ In a senior interview, "Design WhatsApp" is not about a REST API. It is about **
 
 ## 🏗️ Part 2: High-Level Architecture
 
+<img width="1280" height="720" alt="Image" src="https://github.com/user-attachments/assets/d0fd2c6f-b006-4e5f-9ef3-d526ee07821c" />
+
 The core of a chat app is the **Gateway Service** that holds open connections.
 
 ### 1. The Gateway (Chat Server)
