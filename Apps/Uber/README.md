@@ -51,6 +51,7 @@ We need to separate the **Location Updates** (Ephemeral) from the **Trip Data** 
 
 ## System Architecture
 
+![image](https://drive.google.com/file/d/1VeayuMlv29u8ntMTmCNlEWq2Se3vE6Z_/view?usp=drive_link)
 **Key Components:**
 * **API Gateway:** NGINX/Envoy handling load balancing and routing.
 * **Matching Service:** Uses geospatial indexing (Google S2/H3) to match riders with drivers.
