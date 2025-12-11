@@ -131,9 +131,90 @@ Once the ride starts, we need reliability.
     * If 3 heartbeats are missed -> Trigger "Driver Disconnect" workflow.
     * Notify Rider -> Re-queue the Trip in Dispatch Service -> Match with Driver B.
 
-[Image of Trip State Machine Diagram]
+---
+# System Design: The Uber Heartbeat (Mobile Presence)
+
+## 1. The Constraint
+Mobile devices are unreliable. A "missing heartbeat" might mean the driver is in a tunnel, not that the app crashed. Therefore, our system must tolerate *short* failures but act on *long* ones.
+
+## 2. Core Architecture
+We piggyback "Liveness" on top of "Location Updates".
+
+### Components
+1.  **Driver App:** Uses **Bi-directional streams (gRPC/WebSocket)** over QUIC/TCP.
+2.  **Edge Gateway:** Terminates SSL. Tracks connection health.
+3.  **Kafka:** Buffers high-velocity streams (Backpressure handling).
+4.  **In-Memory Store (Redis/Dynomite):** Stores ephemeral state with **TTL**.
+
+### The Flow
+1.  **Update:** Driver sends `{lat: 12.34, long: 56.78}`.
+2.  **State Update:** System updates Redis Key `driver_123`.
+3.  **TTL Reset:** System sets `EXPIRE driver_123 15`.
+4.  **Failure:** If no packet arrives in 15s, Redis key vanishes. Driver is considered "Offline" by the Dispatch system.
 
 ---
+
+## 3. Scaling Techniques
+
+### A. Consistent Hashing (Ringpop)
+Uber developed **Ringpop**, a library that uses Consistent Hashing on the application layer.
+* Services form a ring.
+* Requests for `driver_123` are always routed to the same Node X.
+* If Node X dies, `driver_123` is handled by Node Y.
+* This allows stateful processing in memory without hitting the DB for every heartbeat.
+
+### B. Geo-Sharding
+Data is partitioned by **S2 Cells**.
+* Drivers in a specific S2 cell (e.g., Downtown SF) communicate with a specific Kafka partition and Redis Shard.
+* **Query:** "Find drivers near me" becomes "Query Redis Shard associated with my S2 Cell."
+
+---
+
+# Senior Backend Developer Interview Q&A: Mobile Heartbeats
+
+### Architecture & Protocols
+**Q1: Why use WebSockets/gRPC instead of REST for heartbeats?**
+**A:** REST requires a new TCP 3-way handshake and SSL negotiation for every request. Doing this every 4 seconds for millions of users consumes massive CPU and increases latency. WebSockets/gRPC keep a single persistent connection open.
+
+**Q2: What happens when a driver enters a tunnel (Loss of Signal)?**
+**A:** The persistent connection breaks.
+1.  **Server side:** The TTL in Redis expires. The driver effectively "disappears" from the dispatch map.
+2.  **Client side:** The app queues the location points locally.
+3.  **Reconnection:** When exiting the tunnel, the app batch-uploads the queued points so the trip history remains accurate, and re-establishes the heartbeat.
+
+**Q3: How do you handle the "Thundering Herd" when a cell tower goes down and comes back up?**
+**A:** If 50,000 drivers reconnect simultaneously, they can crash the Auth Service.
+* **Solution:** Implement **Exponential Backoff with Jitter** on the client.
+    * Retry 1: Wait 1s + random(0.1s)
+    * Retry 2: Wait 2s + random(0.5s)
+    * Retry 3: Wait 4s + random(1s)
+
+### Data & State
+**Q4: Redis is fast, but what if the Redis node crashes? Do we lose all driver availability?**
+**A:** Yes, transiently. However, because heartbeats arrive every 4 seconds, the data (which drivers are online) will "self-heal" within seconds on the replica/new node as soon as the next heartbeat packets arrive. We prioritize **Availability (AP)** over **Consistency (CP)** here.
+
+**Q5: Why use UDP (or QUIC) for location heartbeats?**
+**A:** TCP guarantees delivery and ordering, which causes "Head-of-Line Blocking." If packet 1 is lost, packet 2 waits. For real-time location, we don't care about old data. If packet 1 is lost but packet 2 arrives, we want packet 2 immediately. QUIC solves this.
+
+**Q6: How does "Ringpop" (Uber's sharding library) handle heartbeats?**
+**A:** Ringpop acts as a gossip-based membership protocol *between servers*. It allows any server to receive a request and forward it to the specific server that "owns" that driver ID (stateless frontend, stateful backend).
+
+### Logic & Scenarios
+**Q7: How do you distinguish between "App Crash" and "Network Loss"?**
+**A:** From the server's perspective, they look the same (silence).
+* **Refinement:** If the TCP connection is closed cleanly (FIN packet), we know it's a crash or intentional close. If it just times out, it's likely network. We might set a "Ghost" state (likely to return) vs "Offline" (gone).
+
+**Q8: Explain "Geospatial Indexing" in the context of heartbeats.**
+**A:** We don't just store "ID: Alive". We store "S2_Cell_ID: [List of Driver IDs]". When a heartbeat comes in, we must update the index. If a driver moves from Cell A to Cell B, we must atomically remove them from A and add to B.
+
+**Q9: What is the impact of GPS drift on heartbeats?**
+**A:** Stationary drivers might appear to "jump" around due to GPS inaccuracy.
+* **Fix:** Kalman Filters are applied on the client (or server) to smooth out the noise before the heartbeat data is considered valid for dispatching.
+
+**Q10: How do you handle "Zombie Drivers"? (App backgrounded but sending pings)**
+**A:** The OS might allow the app to ping in the background even if the driver isn't actually working.
+* **Fix:** The heartbeat payload includes `app_state` (Foreground/Background). Dispatch logic prioritizes Foreground drivers.
+
 
 ## 🧠 Part 6: Senior Level Q&A Scenarios
 
