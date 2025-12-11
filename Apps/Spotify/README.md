@@ -38,7 +38,7 @@ In a senior interview, "Design Spotify" differs from Netflix. The files are smal
 
 We separate the **Player** (Data) from the **App** (Control).
 
-
+<img width="2332" height="2696" alt="Image" src="https://github.com/user-attachments/assets/cea107eb-f9f8-4c8b-94c6-6ab0cea15d9f" />
 
 ### 1. The Control Plane (Microservices)
 * **Playlist Service:** Manages user collections.
