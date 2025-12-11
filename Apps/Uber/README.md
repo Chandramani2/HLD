@@ -51,7 +51,7 @@ We need to separate the **Location Updates** (Ephemeral) from the **Trip Data** 
 
 ## System Architecture
 
-![image](https://drive.google.com/file/d/1VeayuMlv29u8ntMTmCNlEWq2Se3vE6Z_/view?usp=drive_link)
+<img src="https://drive.google.com/file/d/1VeayuMlv29u8ntMTmCNlEWq2Se3vE6Z_/view?usp=drive_link" width="550">
 
 **Key Components:**
 * **API Gateway:** NGINX/Envoy handling load balancing and routing.
