@@ -49,7 +49,16 @@ We need to separate the **Location Updates** (Ephemeral) from the **Trip Data** 
 * **Dispatch Service:** The brain. Matches Rider A to Driver B.
 * **Trip Service:** Manages the state machine (Requested -> Started -> Ended).
 
-[Image of Uber High Level Architecture Diagram]
+## System Architecture
+
+Below is the high-level architecture diagram demonstrating the interaction between the Rider/Driver apps, the API Gateway, and the underlying microservices (Trip, Matching, Payment).
+
+![Uber Architecture](./uber.jpg)
+
+**Key Components:**
+* **API Gateway:** NGINX/Envoy handling load balancing and routing.
+* **Matching Service:** Uses geospatial indexing (Google S2/H3) to match riders with drivers.
+* **Trip Service:** Manages the state machine of the ride.
 
 ---
 
