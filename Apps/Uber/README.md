@@ -51,10 +51,6 @@ We need to separate the **Location Updates** (Ephemeral) from the **Trip Data** 
 
 ## System Architecture
 
-Below is the high-level architecture diagram demonstrating the interaction between the Rider/Driver apps, the API Gateway, and the underlying microservices (Trip, Matching, Payment).
-
-![Uber Architecture](./uber.jpg)
-
 **Key Components:**
 * **API Gateway:** NGINX/Envoy handling load balancing and routing.
 * **Matching Service:** Uses geospatial indexing (Google S2/H3) to match riders with drivers.
@@ -91,8 +87,6 @@ How do we efficiently answer: *"Find all drivers within 2km of this lat/long?"*
 * Uses **Hilbert Curves** to map 2D spheres onto a 1D line.
 * Provides better coverage than Geohash near poles and grid edges.
 * Used by Tinder, Pokemon Go, and modern Uber.
-
-[Image of Quadtree vs Geohash Spatial Indexing Diagram]
 
 ---
 
