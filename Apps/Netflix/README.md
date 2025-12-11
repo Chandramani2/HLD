@@ -49,7 +49,7 @@ We split the system into three distinct parts to handle the load.
 2.  **Backend (AWS/Cloud):** Handles API requests, Metadata, Billing, User Profile (The "Control Plane").
 3.  **CDN (Open Connect):** Physical boxes placed inside ISP networks that hold the video files (The "Data Plane").
 
-[Image of Netflix High Level Architecture Client Backend CDN]
+![Image](https://github.com/user-attachments/assets/ac6601a9-547c-45a1-8466-3241a3c27afb)
 
 ---
 

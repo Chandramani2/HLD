@@ -37,6 +37,8 @@ Stock apps do not have flat traffic.
 
 ## 🏗️ Part 2: High-Level Architecture
 
+<img width="2816" height="1536" alt="Image" src="https://github.com/user-attachments/assets/95ca0262-78d3-47f8-a5f0-5d5e0893f3a3" />
+
 We segregate the system into **Transactional** (Ordering) and **Streaming** (Data).
 
 ### 1. The Core Services
