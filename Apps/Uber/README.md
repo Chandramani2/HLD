@@ -53,7 +53,7 @@ We need to separate the **Location Updates** (Ephemeral) from the **Trip Data** 
 
 Below is the high-level architecture diagram demonstrating the interaction between the Rider/Driver apps, the API Gateway, and the underlying microservices (Trip, Matching, Payment).
 
-![Uber Architecture](./uber.jpg)
+![Image](https://github.com/user-attachments/assets/3d48a6b0-e344-4caf-8f68-0d1735523995)
 
 **Key Components:**
 * **API Gateway:** NGINX/Envoy handling load balancing and routing.
