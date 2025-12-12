@@ -51,6 +51,8 @@ We split the system into three distinct parts to handle the load.
 
 ![Image](https://github.com/user-attachments/assets/ac6601a9-547c-45a1-8466-3241a3c27afb)
 
+![Image](https://github.com/user-attachments/assets/fda00374-98b6-48ff-9a3d-15c548b64b08)
+
 ---
 
 ## 🎥 Part 3: The Data Plane (Video Storage & Delivery)
