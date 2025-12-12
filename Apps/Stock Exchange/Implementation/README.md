@@ -335,33 +335,33 @@ The following diagram illustrates the **BUY (BID)** side of the order book. The 
 ```mermaid
 flowchart LR
     %% 1. THE TREEMAP (Leftmost)
-    subgraph TREEMAP ["TREEMAP (Price Ladder)"]
+    subgraph TREEMAP
         direction TB
-        P100["Price $100.00 (Best Bid)"]
-        P99["Price $99.50"]
+        P100(Price 100.00 - Best Bid)
+        P99(Price 99.50)
         P100 --> P99
     end
 
     %% 2. THE DOUBLE LINKED LISTS (Center)
-    subgraph DLL_100 ["DLL at $100.00 (FIFO Queue)"]
+    subgraph DLL_100 [DLL at 100.00 FIFO Queue]
         direction LR
-        Head1((Head)) --> OrderA["Order A (Qty 10)"]
-        OrderA <--> OrderB["Order B (Qty 5)"]
+        Head1((Head)) --> OrderA[Order A Qty 10]
+        OrderA <--> OrderB[Order B Qty 5]
         OrderB <-- Tail1((Tail))
     end
 
-    subgraph DLL_99 ["DLL at $99.50"]
+    subgraph DLL_99 [DLL at 99.50]
         direction LR
-        Head2((Head)) --> OrderC["Order C (Qty 50)"]
+        Head2((Head)) --> OrderC[Order C Qty 50]
         OrderC <-- Tail2((Tail))
     end
 
     %% 3. THE HASHMAP (Rightmost)
-    subgraph HASHMAP ["HASHMAP (ID Lookup)"]
+    subgraph HASHMAP
         direction TB
-        H1["Key: ID 101"]
-        H2["Key: ID 102"]
-        H3["Key: ID 103"]
+        H1[Key ID 101]
+        H2[Key ID 102]
+        H3[Key ID 103]
     end
 
     %% CONNECTIONS
@@ -372,7 +372,7 @@ flowchart LR
     %% Hashmap points to specific Order Nodes
     H1 -.-> OrderA
     H2 -.-> OrderB
-    H3 -.-> OrderC   
+    H3 -.-> OrderC 
 ```
 
 ---
