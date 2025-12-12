@@ -334,59 +334,46 @@ The following diagram illustrates the **BUY (BID)** side of the order book. The 
 
 ```mermaid
 graph TD
-    subgraph "The Order Book (Buy Side)"
-    direction TB
-
-    %% THE HASHMAP
-    subgraph HASHMAP ["HASHMAP (Order ID Lookup) O(1)"]
-        H1["Key: ID 101 -> Val: Pointer to Order A"]
-        H2["Key: ID 102 -> Val: Pointer to Order B"]
-        H3["Key: ID 103 -> Val: Pointer to Order C"]
+    %% 1. THE HASHMAP SECTION
+    subgraph HashmapSection [HASHMAP: ID Lookup]
+        H1[Key: ID 101]
+        H2[Key: ID 102]
+        H3[Key: ID 103]
     end
 
-    %% THE TREEMAP
-    subgraph TREEMAP ["TREEMAP (Sorted Price Levels) O(log N)"]
-        T_Root["Price $100.00 (Best Bid)"]
-        T_Mid["Price $99.50"]
-        T_Low["Price $99.00"]
-
-        T_Root --> T_Mid
-        T_Mid --> T_Low
+    %% 2. THE TREEMAP SECTION
+    subgraph TreemapSection [TREEMAP: Price Levels]
+        Price100[Price $100.00 - Best Bid]
+        Price995[Price $99.50]
+        Price990[Price $99.00]
+        
+        Price100 --> Price995
+        Price995 --> Price990
     end
 
-    %% THE DOUBLE LINKED LISTS
-    subgraph DLL_TOP ["DLL at $100.00 (FIFO Priority)"]
+    %% 3. THE DOUBLE LINKED LISTS
+    subgraph DLL_Top [DLL at $100.00 - FIFO]
         direction LR
-        Head1[Head] --> OrderA["Order A (ID 101, Qty 10)"]
-        OrderA <--> OrderB["Order B (ID 102, Qty 5)"]
-        OrderB <-- Tail1[Tail]
+        Head1((Head)) --> OrderA[Order A: Qty 10]
+        OrderA <--> OrderB[Order B: Qty 5]
+        OrderB <-- Tail1((Tail))
     end
 
-    subgraph DLL_MID ["DLL at $99.50"]
-         direction LR
-         Head2[Head] --> OrderC["Order C (ID 103, Qty 50)"]
-         OrderC <-- Tail2[Tail]
-    end
-
-    subgraph DLL_LOW ["DLL at $99.00"]
+    subgraph DLL_Mid [DLL at $99.50]
         direction LR
-        Head3[Head] --> Empty[Empty]
-        Empty <-- Tail3[Tail]
+        Head2((Head)) --> OrderC[Order C: Qty 50]
+        OrderC <-- Tail2((Tail))
     end
 
     %% CONNECTIONS
-    %% Treemap nodes point to DLL Heads/Tails
-    T_Root -.->|Ptr to| Head1
-    T_Root -.->|Ptr to| Tail1
-    T_Mid -.->|Ptr to| Head2
-    T_Low -.->|Ptr to| Head3
+    %% Treemap nodes point to DLL Heads
+    Price100 -.->|Ptr| Head1
+    Price995 -.->|Ptr| Head2
 
-    %% Hashmap points directly to DLL nodes
+    %% Hashmap points directly to DLL Order Nodes
     H1 -.->|Direct Ptr| OrderA
     H2 -.->|Direct Ptr| OrderB
     H3 -.->|Direct Ptr| OrderC
-
-    end
 ```
 
 ---
