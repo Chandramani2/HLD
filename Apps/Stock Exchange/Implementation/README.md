@@ -429,3 +429,76 @@ graph TD
 | **Execute Match** | DLL (Head) | $O(1)$ | Popping from list. |
 
 *Note: $N$ in Treemap refers to active price levels. $N$ in Hashmap refers to total active orders.*
+
+# Understanding the Treemap Data Structure
+
+In the context of Computer Science and Stock Exchange Matching Engines, a **Treemap** is a specialized data structure used to store key-value pairs in a **sorted order**.
+
+It is distinct from a *HashMap*, which stores data in random order, and it is unrelated to the visual charts (colorful boxes) often seen in data analytics.
+
+---
+
+## 1. What is a Treemap?
+
+A Treemap is a map that maintains its keys in a specific order (ascending or descending).
+
+* **HashMap:** Focuses on speed. It scatters data randomly in memory. Finding a specific item is fast ($O(1)$), but finding the "highest" or "lowest" number requires scanning the entire list.
+* **Treemap:** Focuses on order. It organizes data in a Tree structure. Finding the "highest" or "lowest" number is instantaneous.
+
+---
+
+## 2. How it Works (The Red-Black Tree)
+
+Under the hood, a Treemap typically uses a **Self-Balancing Binary Search Tree (BST)**, most commonly a **Red-Black Tree**.
+
+### The Logic
+1.  **Root:** The tree starts with a single top node.
+2.  **Left Child:** Any key **smaller** than the current node goes to the left.
+3.  **Right Child:** Any key **larger** than the current node goes to the right.
+
+### Visualization
+Imagine we insert the prices `100`, `99`, `101`, and `98` into a Treemap.
+
+```mermaid
+graph TD
+    Root((100))
+    L1((99))
+    R1((101))
+    L2((98))
+
+    Root -->|Smaller| L1
+    Root -->|Larger| R1
+    L1 -->|Smaller| L2
+```
+
+* **To find the Lowest Price:** The engine simply traverses all the way down the **Left** side.
+* **To find the Highest Price:** The engine traverses all the way down the **Right** side.
+
+---
+
+## 3. Why is this critical for Stock Exchanges?
+
+A Matching Engine runs on **Price-Time Priority**.
+* **Price Priority** means the engine must *always* match the **Highest Buy** against the **Lowest Sell** before anything else.
+
+If we used a **HashMap**:
+* We would have a bucket of prices: `{99, 100, 98, 101}`.
+* To find the best price, the computer has to ask: "Is 99 the highest? No. Is 100? No. Is 101? Yes."
+* This takes $O(N)$ time (scanning every order), which is too slow for HFT.
+
+By using a **Treemap**:
+* The prices are already sorted in the tree structure.
+* The engine grabs the **Right-most node** to get the Best Bid instantly.
+* This takes $O(\log N)$ or $O(1)$ (cached) time.
+
+---
+
+## 4. Comparison: Treemap vs. HashMap
+
+| Feature | HashMap | TreeMap |
+| :--- | :--- | :--- |
+| **Ordering** | Random / Unsorted | **Always Sorted** |
+| **Find Specific Key** | Very Fast ($O(1)$) | Fast ($O(\log N)$) |
+| **Find Min/Max Key** | Slow ($O(N)$) | **Very Fast ($O(\log N)$)** |
+| **Internal Structure** | Array of Buckets | Red-Black Tree |
+| **Matching Engine Role** | Looking up Order IDs | **Maintains the Price Ladder** |
