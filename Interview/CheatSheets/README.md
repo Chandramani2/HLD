@@ -75,22 +75,22 @@ This generic architecture solves 90% of web-scale problems.
 
 ```mermaid
 flowchart TD
-    Client[Client App] --> CDN[CDN (Static Assets)]
+    Client[Client App] --> CDN["CDN (Static Assets)"]
     Client --> DNS[DNS]
     Client --> LB[Load Balancer]
     
     LB --> Service[Stateless Web Servers]
     
-    Service --> Cache[Distributed Cache (Redis)]
-    Service --> DB_Master[(DB Master)]
+    Service --> Cache["Distributed Cache (Redis)"]
+    Service --> DB_Master[("(DB Master)")]
     
     subgraph Data Layer
-        DB_Master -.-> DB_Slave[(DB Read Replicas)]
-        DB_Master -.-> MQ[Message Queue (Kafka)]
+        DB_Master -.-> DB_Slave[("(DB Read Replicas)")]
+        DB_Master -.-> MQ["Message Queue (Kafka)"]
     end
     
     MQ --> Workers[Async Workers]
-    Workers --> Archive[Object Storage (S3)]
+    Workers --> Archive["Object Storage (S3)"]
 ```
 
 ---
