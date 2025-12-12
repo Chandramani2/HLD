@@ -67,27 +67,35 @@ Over time, you will have thousands of small SSTables on disk. This slows down re
 
 ```mermaid
 graph TD
-    subgraph "Write Path"
-        Client[Client Request] --> WAL[(Write Ahead Log)]
-        Client --> MemTable{MemTable <br/> (RAM - Sorted)}
+    subgraph "Write Path (Fast)"
+        Client([Client Write Request]) -->|1. Append| WAL[("Write Ahead Log<br/>(Disk Recovery)")]
+        Client -->|2. Insert| Mem[("MemTable<br/>(In-Memory Tree/SkipList)")]
     end
 
     subgraph "Flush Process"
-        MemTable -.->|Flush when full| L0[SSTable Level 0]
+        Mem -->|Threshold Reached| ImmutMem[("Immutable<br/>MemTable")]
+        ImmutMem -.->|Flush to Disk| SST1[("SSTable - Level 0<br/>(Sorted String Table)")]
     end
 
-    subgraph "Compaction Process"
-        L0 --> Merger((Compaction))
-        L1[SSTable Level 1] --> Merger
-        L1_Old[SSTable Level 1] --> Merger
-        Merger --> L2[SSTable Level 2 <br/> (Merged & Sorted)]
+    subgraph "Read Path (Merge)"
+        Read([Client Read Request]) --> CheckMem{Check MemTable?}
+        CheckMem -- Yes --> FoundMem[Return Data]
+        CheckMem -- No --> CheckBloom{Check Bloom Filter?}
+        CheckBloom -- Possibly Yes --> SearchSST[Search SSTables]
+        CheckBloom -- Definitely No --> NotFound[Key Not Found]
     end
 
-    classDef memory fill:#f9f,stroke:#333,stroke-width:2px;
-    classDef disk fill:#ccf,stroke:#333,stroke-width:2px;
-    class MemTable memory;
-    class WAL,L0,L1,L1_Old,L2 disk;
-    
+    subgraph "Compaction (Background)"
+        SST1 -->|Merge Sort| SST2[("SSTable - Level 1")]
+        SST1_B[("SSTable - Level 0")] -->|Merge Sort| SST2
+        SST2 -->|Merge Sort| SST3[("SSTable - Level 2")]
+    end
+
+    style WAL fill:#f9f,stroke:#333,stroke-width:2px
+    style Mem fill:#ccf,stroke:#333,stroke-width:2px
+    style SST1 fill:#ff9,stroke:#333,stroke-width:2px
+    style SST2 fill:#ff9,stroke:#333,stroke-width:2px
+    style SST3 fill:#fc9,stroke:#333,stroke-width:2px
 ```
 
 ---
