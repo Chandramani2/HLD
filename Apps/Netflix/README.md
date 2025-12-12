@@ -100,7 +100,15 @@ This handles everything *except* the video.
 * **Pattern:** **Backends for Frontends (BFF)**.
     * One generic API is bad. The TV app needs 4K assets; the Mobile app needs tiny assets.
     * Use an "Adapter Service" for each device type that formats the response specifically for that device.
-
+* **Microservices:**
+  * Small, stateless services like `User Service`, `Billing Service`, `Subscription Service`, and `Recommendation Service`.
+  * Communication occurs via **gRPC** or REST.
+* **Service Discovery (Eureka):**
+  * Acts as a phonebook. When Service A needs to talk to Service B, it asks Eureka for Service B's IP address.
+* **Resilience (Hystrix / Resilience4j):**
+  * Implements the **Circuit Breaker Pattern**. If the "Ratings Service" fails, the circuit opens, and the app shows the movie without a star rating rather than crashing.
+  * **Chaos Monkey:** A tool that randomly terminates instances in production to ensure system resilience.
+  
 ### 2. Database Architecture (Polyglot Persistence)
 One DB cannot rule them all.
 
@@ -112,11 +120,55 @@ One DB cannot rule them all.
 | **Metadata** | **CockroachDB / Spanner** | Movie titles/Cast. Needs global scale but strong consistency. |
 | **Caching** | **EVCache (Memcached)** | Netflix prefers Memcached over Redis for pure KV speed and simplicity. |
 
-### 3. The Recommendation Engine (Spark/Kafka)
+## 3. The Content Pipeline (Video Processing)
+
+Before a user can click "Play," the raw video goes through an extensive processing pipeline.
+
+1.  **Ingest:** Production houses upload terabytes of raw high-definition video to **AWS S3**.
+2.  **Validation:** Automated checks verify file integrity.
+3.  **Transcoding (The Encoding Ladder):**
+  * The video is broken into small chunks.
+  * Chunks are converted into **1,200+ different formats/combinations**.
+  * *Purpose:* To support various devices (TVs, mobile, web) and network speeds (Adaptive Bitrate Streaming).
+4.  **Packaging:** Digital Rights Management (DRM) is applied.
+5.  **Distribution:** Final files are pushed to **Open Connect** servers.
+
+---
+
+## 4. Open Connect (The Data Plane)
+
+This is Netflix's proprietary CDN. Instead of using third-party CDNs, Netflix builds its own global network.
+
+* **OCAs (Open Connect Appliances):** Custom hardware servers placed directly inside Internet Service Providers (ISPs) and Internet Exchange Points (IXPs).
+* **Proactive Caching:**
+  * Netflix predicts content popularity by region (e.g., *Stranger Things* in the US, Anime in Japan).
+  * Content is pushed to local OCAs during off-peak hours (prefetching) rather than waiting for a user to request it.
+* **Benefit:** The video stream often does not travel over the internet backbone; it comes from a server inside the user's ISP data center.
+
+---
+
+## 5. Workflow: What Happens When You Click "Play"?
+
+1.  **Request (Client → AWS):**
+  * User clicks play. The client sends a request to the **Playback API** on AWS.
+2.  **Validation (AWS):**
+  * Backend verifies subscription status and licensing rights for the region.
+3.  **Steering (AWS → Client):**
+  * The **Steering Service** determines the optimal Open Connect Appliance (OCA).
+  * It returns a direct URL to the video file (e.g., `https://oca-dallas-isp.netflix.com/movie.mp4`).
+4.  **Streaming (Client ↔ Open Connect):**
+  * The client connects to the provided OCA IP address.
+  * Video streaming begins.
+5.  **Adaptive Bitrate (Client Logic):**
+  * The client monitors internet speed. If bandwidth drops, it seamlessly switches to a lower bitrate chunk to prevent buffering.
+6.  **Telemetry (Client → AWS):**
+  * Client sends heartbeats to the Data Pipeline (Kafka) logging quality and viewing position.
+
+### 6. The Recommendation Engine (Spark/Kafka)
 * **Online:** Near Real-time. "You just finished Matrix 1, watch Matrix 2."
-    * Implementation: **Kafka Stream** processing.
+  * Implementation: **Kafka Stream** processing.
 * **Offline:** Batch Processing. "Because you watched Action last month..."
-    * Implementation: **Apache Spark** jobs running on Hadoop/S3 Data Lake.
+  * Implementation: **Apache Spark** jobs running on Hadoop/S3 Data Lake.
 
 ---
 
@@ -136,41 +188,54 @@ One DB cannot rule them all.
 
 ---
 
-## 🧪 Part 6: Senior Level Q&A Scenarios
+## Part 6. Technology Stack Summary
+
+| Component | Technology Used |
+| :--- | :--- |
+| **Cloud Provider** | AWS (EC2, S3, ELB) |
+| **CDN** | Netflix Open Connect (FreeBSD + NGINX) |
+| **Frontend/API** | React, Node.js, GraphQL (Federated) |
+| **Microservices** | Java, Spring Boot, gRPC |
+| **Databases** | Cassandra (History), MySQL (Billing), EVCache (Hot Data) |
+| **Messaging** | Apache Kafka |
+| **Big Data/Analytics** | Apache Spark, Hadoop, Chukwa |
+| **Container Orchestration**| Titus (Custom platform), Kubernetes |
+
+## 🧪 Part 7: Senior Level Q&A Scenarios
 
 ### Scenario A: Resume Watching (Concurrency)
 **Interviewer:** *"I pause the movie on my TV. I open my phone. It should resume at the exact same second. How?"*
 
 * **The Challenge:** Synchronization latency.
 * ✅ **Senior Solution:**
-    1.  TV sends "Heartbeat" every 10s to **Cassandra** (`User:123, Movie:Matrix, Time:500s`).
-    2.  Phone opens App -> Calls `GetLastViewed(User:123)`.
-    3.  **Race Condition:** What if TV writes 510s *while* Phone reads 500s?
-    4.  **Resolution:** **Last Write Wins (LWW)** is acceptable here. It's okay if we are off by 10 seconds. We don't need strict ACID transactions for bookmarking.
+  1.  TV sends "Heartbeat" every 10s to **Cassandra** (`User:123, Movie:Matrix, Time:500s`).
+  2.  Phone opens App -> Calls `GetLastViewed(User:123)`.
+  3.  **Race Condition:** What if TV writes 510s *while* Phone reads 500s?
+  4.  **Resolution:** **Last Write Wins (LWW)** is acceptable here. It's okay if we are off by 10 seconds. We don't need strict ACID transactions for bookmarking.
 
 ### Scenario B: Global Release (Thundering Herd)
 **Interviewer:** *"We release a new season at midnight. 50 Million users hit 'Play' instantly. How does the system survive?"*
 
 * ✅ **Senior Solution:**
-    1.  **Pre-warming (Cache):** Load the metadata into Redis/Memcached 1 hour before.
-    2.  **Pre-warming (CDN):** Push the video files to the Edge Servers (ISPs) during off-peak hours (3 AM previous day).
-    3.  **Jitter:** If the API is overwhelmed, the client retries with `Exponential Backoff + Jitter` to spread the load.
+  1.  **Pre-warming (Cache):** Load the metadata into Redis/Memcached 1 hour before.
+  2.  **Pre-warming (CDN):** Push the video files to the Edge Servers (ISPs) during off-peak hours (3 AM previous day).
+  3.  **Jitter:** If the API is overwhelmed, the client retries with `Exponential Backoff + Jitter` to spread the load.
 
 ### Scenario C: The "Death Star" Architecture
 **Interviewer:** *"We have 1,000 microservices. Debugging a slow request is impossible."*
 
 * ✅ **Senior Solution:** "**Distributed Tracing (Zipkin/Jaeger).**"
-    * Every request gets a `TraceID` at the API Gateway.
-    * This ID is passed in HTTP headers (`X-B3-TraceId`) to every downstream service.
-    * We can visualize the waterfall graph to see exactly which microservice took 200ms.
+  * Every request gets a `TraceID` at the API Gateway.
+  * This ID is passed in HTTP headers (`X-B3-TraceId`) to every downstream service.
+  * We can visualize the waterfall graph to see exactly which microservice took 200ms.
 
 ### Scenario D: Cost Optimization
 **Interviewer:** *"S3 storage costs are eating our profits. We store too many formats."*
 
 * ✅ **Senior Solution:** "**Dynamic Storage Policies.**"
-    * **Hot Data:** "Stranger Things" (New) -> Store on SSD, Replicate to 100% of CDNs.
-    * **Warm Data:** "Friends" (Old but popular) -> Standard S3, Replicate to 50% of CDNs.
-    * **Cold Data:** "Obscure 1950s Docu" -> Glacier (Deep Archive). Don't replicate to CDN. Serve from Origin (Higher latency accepted).
+  * **Hot Data:** "Stranger Things" (New) -> Store on SSD, Replicate to 100% of CDNs.
+  * **Warm Data:** "Friends" (Old but popular) -> Standard S3, Replicate to 50% of CDNs.
+  * **Cold Data:** "Obscure 1950s Docu" -> Glacier (Deep Archive). Don't replicate to CDN. Serve from Origin (Higher latency accepted).
 
 ---
 
@@ -183,4 +248,3 @@ We have covered:
 * [x] **Patterns** (Circuit Breaker, Bulkhead, BFF).
 * [x] **Scenarios** (Concurrency, Caching).
 
-**This concludes the Senior System Design Series.**[Stock Broker](../Stock%20Broker)
