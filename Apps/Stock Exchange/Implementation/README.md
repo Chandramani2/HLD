@@ -333,47 +333,46 @@ To run an exchange efficiently, the engine must satisfy conflicting performance 
 The following diagram illustrates the **BUY (BID)** side of the order book. The Sell side is identical but sorted in reverse price order.
 
 ```mermaid
-graph TD
-    %% 1. THE HASHMAP SECTION
-    subgraph HashmapSection [HASHMAP: ID Lookup]
-        H1[Key: ID 101]
-        H2[Key: ID 102]
-        H3[Key: ID 103]
+flowchart LR
+    %% 1. THE TREEMAP (Leftmost)
+    subgraph TREEMAP ["TREEMAP (Price Ladder)"]
+        direction TB
+        P100["Price $100.00 (Best Bid)"]
+        P99["Price $99.50"]
+        P100 --> P99
     end
 
-    %% 2. THE TREEMAP SECTION
-    subgraph TreemapSection [TREEMAP: Price Levels]
-        Price100[Price $100.00 - Best Bid]
-        Price995[Price $99.50]
-        Price990[Price $99.00]
-        
-        Price100 --> Price995
-        Price995 --> Price990
-    end
-
-    %% 3. THE DOUBLE LINKED LISTS
-    subgraph DLL_Top [DLL at $100.00 - FIFO]
+    %% 2. THE DOUBLE LINKED LISTS (Center)
+    subgraph DLL_100 ["DLL at $100.00 (FIFO Queue)"]
         direction LR
-        Head1((Head)) --> OrderA[Order A: Qty 10]
-        OrderA <--> OrderB[Order B: Qty 5]
+        Head1((Head)) --> OrderA["Order A (Qty 10)"]
+        OrderA <--> OrderB["Order B (Qty 5)"]
         OrderB <-- Tail1((Tail))
     end
 
-    subgraph DLL_Mid [DLL at $99.50]
+    subgraph DLL_99 ["DLL at $99.50"]
         direction LR
-        Head2((Head)) --> OrderC[Order C: Qty 50]
+        Head2((Head)) --> OrderC["Order C (Qty 50)"]
         OrderC <-- Tail2((Tail))
     end
 
-    %% CONNECTIONS
-    %% Treemap nodes point to DLL Heads
-    Price100 -.->|Ptr| Head1
-    Price995 -.->|Ptr| Head2
+    %% 3. THE HASHMAP (Rightmost)
+    subgraph HASHMAP ["HASHMAP (ID Lookup)"]
+        direction TB
+        H1["Key: ID 101"]
+        H2["Key: ID 102"]
+        H3["Key: ID 103"]
+    end
 
-    %% Hashmap points directly to DLL Order Nodes
-    H1 -.->|Direct Ptr| OrderA
-    H2 -.->|Direct Ptr| OrderB
-    H3 -.->|Direct Ptr| OrderC
+    %% CONNECTIONS
+    %% Treemap points to the Head of the Lists
+    P100 -.-> Head1
+    P99 -.-> Head2
+
+    %% Hashmap points to specific Order Nodes
+    H1 -.-> OrderA
+    H2 -.-> OrderB
+    H3 -.-> OrderC   
 ```
 
 ---
