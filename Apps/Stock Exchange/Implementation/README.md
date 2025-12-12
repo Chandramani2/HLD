@@ -333,46 +333,52 @@ To run an exchange efficiently, the engine must satisfy conflicting performance 
 The following diagram illustrates the **BUY (BID)** side of the order book. The Sell side is identical but sorted in reverse price order.
 
 ```mermaid
-flowchart LR
-    %% 1. THE TREEMAP (Leftmost)
-    subgraph TREEMAP
-        direction TB
-        P100(Price 100.00 - Best Bid)
-        P99(Price 99.50)
-        P100 --> P99
+graph TD
+    %% 1. TREEMAP SECTION
+    subgraph P_TREE ["TREEMAP (Price Levels)"]
+        Tree100["Price 100.00 (Best Bid)"]
+        Tree99["Price 99.50"]
+        Tree100 --> Tree99
     end
 
-    %% 2. THE DOUBLE LINKED LISTS (Center)
-    subgraph DLL_100 [DLL at 100.00 FIFO Queue]
-        direction LR
-        Head1((Head)) --> OrderA[Order A Qty 10]
-        OrderA <--> OrderB[Order B Qty 5]
-        OrderB <-- Tail1((Tail))
+    %% 2. LINKED LIST SECTION
+    subgraph DLL_100 ["DLL at 100.00"]
+        Head1["HEAD"]
+        OrderA["Order A (Qty 10)"]
+        OrderB["Order B (Qty 5)"]
+        Tail1["TAIL"]
+        
+        Head1 --> OrderA
+        OrderA --> OrderB
+        OrderB --> Tail1
     end
 
-    subgraph DLL_99 [DLL at 99.50]
-        direction LR
-        Head2((Head)) --> OrderC[Order C Qty 50]
-        OrderC <-- Tail2((Tail))
+    subgraph DLL_99 ["DLL at 99.50"]
+        Head2["HEAD"]
+        OrderC["Order C (Qty 50)"]
+        Tail2["TAIL"]
+
+        Head2 --> OrderC
+        OrderC --> Tail2
     end
 
-    %% 3. THE HASHMAP (Rightmost)
-    subgraph HASHMAP
-        direction TB
-        H1[Key ID 101]
-        H2[Key ID 102]
-        H3[Key ID 103]
+    %% 3. HASHMAP SECTION
+    subgraph H_MAP ["HASHMAP (ID Lookup)"]
+        Map1["Key: ID 101"]
+        Map2["Key: ID 102"]
+        Map3["Key: ID 103"]
     end
 
     %% CONNECTIONS
-    %% Treemap points to the Head of the Lists
-    P100 -.-> Head1
-    P99 -.-> Head2
+    %% Treemap to List Heads
+    Tree100 -.-> Head1
+    Tree99 -.-> Head2
 
-    %% Hashmap points to specific Order Nodes
-    H1 -.-> OrderA
-    H2 -.-> OrderB
-    H3 -.-> OrderC 
+    %% Hashmap to Orders
+    Map1 -.-> OrderA
+    Map2 -.-> OrderB
+    Map3 -.-> OrderC
+
 ```
 
 ---
