@@ -303,3 +303,137 @@ By using a **HashMap** to store a direct pointer to the `OrderNode` inside the *
 
 ### 3. Why This Matters
 In modern markets, **90% to 95% of all orders are cancelled** without ever being traded. Market Makers constantly adjust their quotes (cancelling and re-submitting) to track the underlying asset price. If cancellation is slow, the entire exchange slows down, and Market Makers will pull their liquidity.
+
+# Stock Exchange Matching Engine Architecture
+### The Treemap + Hashmap + Double Linked List Pattern
+
+This document outlines the classic high-frequency trading (HFT) design pattern used to build low-latency matching engines. It combines three distinct data structures to optimize for **Price-Time Priority** matching and rapid order management.
+
+---
+
+## 1. High-Level Concept
+
+To run an exchange efficiently, the engine must satisfy conflicting performance requirements:
+1.  **Fast Matching:** Quickly find the best price (Highest Bid / Lowest Ask).
+2.  **Fairness (FIFO):** Orders at the same price must be matched based on arrival time.
+3.  **Fast Management:** Traders need to cancel or modify orders instantly, regardless of where the order sits in the queue.
+
+### The Trio of Data Structures
+
+| Structure | Role | Key Benefit |
+| :--- | :--- | :--- |
+| **Treemap** | The "Price Ladder" | Keeps price levels sorted. Allows $O(\log N)$ or $O(1)$ access to the Best Bid/Ask. |
+| **Double Linked List (DLL)** | The "Time Queue" | Manages FIFO priority at a specific price. Allows $O(1)$ insertion at tail and $O(1)$ removal from *anywhere* (head, tail, or middle). |
+| **Hashmap** | The "Lookup Index" | Maps `OrderID` $\to$ `OrderNode`. Allows $O(1)$ direct access to an order for cancellation without searching. |
+
+---
+
+## 2. Architecture Visualization
+
+The following diagram illustrates the **BUY (BID)** side of the order book. The Sell side is identical but sorted in reverse price order.
+
+```mermaid
+graph TD
+    subgraph "The Order Book (Buy Side)"
+    direction TB
+
+    %% THE HASHMAP
+    subgraph HASHMAP ["HASHMAP (Order ID Lookup) O(1)"]
+        H1["Key: ID 101 -> Val: Pointer to Order A"]
+        H2["Key: ID 102 -> Val: Pointer to Order B"]
+        H3["Key: ID 103 -> Val: Pointer to Order C"]
+    end
+
+    %% THE TREEMAP
+    subgraph TREEMAP ["TREEMAP (Sorted Price Levels) O(log N)"]
+        T_Root["Price $100.00 (Best Bid)"]
+        T_Mid["Price $99.50"]
+        T_Low["Price $99.00"]
+
+        T_Root --> T_Mid
+        T_Mid --> T_Low
+    end
+
+    %% THE DOUBLE LINKED LISTS
+    subgraph DLL_TOP ["DLL at $100.00 (FIFO Priority)"]
+        direction LR
+        Head1[Head] --> OrderA["Order A (ID 101, Qty 10)"]
+        OrderA <--> OrderB["Order B (ID 102, Qty 5)"]
+        OrderB <-- Tail1[Tail]
+    end
+
+    subgraph DLL_MID ["DLL at $99.50"]
+         direction LR
+         Head2[Head] --> OrderC["Order C (ID 103, Qty 50)"]
+         OrderC <-- Tail2[Tail]
+    end
+
+    subgraph DLL_LOW ["DLL at $99.00"]
+        direction LR
+        Head3[Head] --> Empty[Empty]
+        Empty <-- Tail3[Tail]
+    end
+
+    %% CONNECTIONS
+    %% Treemap nodes point to DLL Heads/Tails
+    T_Root -.->|Ptr to| Head1
+    T_Root -.->|Ptr to| Tail1
+    T_Mid -.->|Ptr to| Head2
+    T_Low -.->|Ptr to| Head3
+
+    %% Hashmap points directly to DLL nodes
+    H1 -.->|Direct Ptr| OrderA
+    H2 -.->|Direct Ptr| OrderB
+    H3 -.->|Direct Ptr| OrderC
+
+    end
+```
+
+---
+
+## 3. Detailed Workflows
+
+### A. New Limit Order Submission
+*Example: BUY 10 shares @ $100.00*
+
+1.  **Check Match:** Engine checks Sell Book. If no match, proceed to rest the order.
+2.  **Find Price Level (Treemap):** Query Treemap for `$100.00`.
+    * *Found:* Retrieve existing Price Level object.
+    * *Not Found:* Create new Price Level and new empty DLL. Insert into Treemap ($O(\log N)$).
+3.  **Append (DLL):** Create `OrderNode`. Link it to the **Tail** of the `$100.00` DLL ($O(1)$). This preserves Time Priority.
+4.  **Index (Hashmap):** Add `OrderID` $\to$ `OrderNode` pointer to Hashmap ($O(1)$).
+
+### B. Order Cancellation (The "Hybrid" Strength)
+*Example: Cancel Order ID 102 (which is stuck in the middle of a queue)*
+
+1.  **Locate (Hashmap):** Query Hashmap for ID `102`. Get direct pointer to **Order B** node. ($O(1)$).
+2.  **Unlink (DLL):**
+    * Because the node has `Next` and `Prev` pointers:
+    * `OrderB.Prev.Next = OrderB.Next`
+    * `OrderB.Next.Prev = OrderB.Prev`
+    * The node is removed from the chain instantly ($O(1)$). No traversal required.
+3.  **Cleanup:** Remove ID from Hashmap. If DLL is now empty, remove Price Level from Treemap.
+
+### C. Matching (Execution)
+*Example: Incoming Market SELL for 12 shares*
+
+1.  **Find Best Price:** Access highest key in Buy Treemap ($100.00$). ($O(1)$ cached access).
+2.  **Access Queue:** Go to Head of the `$100.00` DLL.
+3.  **Execute (FIFO):**
+    * **Order A (Qty 10):** Fully matches 10 shares. Order A removed from Head ($O(1)$) and Hashmap ($O(1)$).
+    * **Order B (Qty 5):** Partially matches remaining 2 shares. Order B quantity updated to 3. Remains at Head.
+4.  **Result:** Market order filled.
+
+---
+
+## 4. Time Complexity Analysis
+
+| Operation | Structure Used | Complexity | Notes |
+| :--- | :--- | :--- | :--- |
+| **Get Best Bid/Ask** | Treemap | $O(1)$ or $O(\log N)$ | Usually $O(1)$ via cached pointer to tree extreme. |
+| **Add New Price** | Treemap | $O(\log N)$ | Balancing the Red-Black tree. |
+| **Add Order (Rest)** | DLL (Tail) | $O(1)$ | Appending to list. |
+| **Cancel Order** | Hashmap + DLL | $O(1)$ | **Crucial:** Direct lookup + pointer unlinking. |
+| **Execute Match** | DLL (Head) | $O(1)$ | Popping from list. |
+
+*Note: $N$ in Treemap refers to active price levels. $N$ in Hashmap refers to total active orders.*
