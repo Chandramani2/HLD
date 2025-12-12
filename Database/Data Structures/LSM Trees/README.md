@@ -87,6 +87,7 @@ graph TD
     classDef disk fill:#ccf,stroke:#333,stroke-width:2px;
     class MemTable memory;
     class WAL,L0,L1,L1_Old,L2 disk;
+    
 ```
 
 ---
