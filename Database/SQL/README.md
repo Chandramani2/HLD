@@ -89,7 +89,54 @@ Understanding these trade-offs is crucial for high-concurrency systems.
 * **Dirty Read:** Reading uncommitted data (that might be rolled back).
 * **Phantom Read:** A transaction runs the same query twice but gets different rows because someone inserted a new row in between.
 
+In distributed SQL environments, **isolation levels** determine how and when the changes made by one transaction become visible to others. This is a critical balance between **consistency** (data integrity) and **concurrency** (system performance).
 
+---
+
+## 1. Read Uncommitted
+The lowest isolation level. Transactions can see data changes made by other concurrent transactions even before they are committed.
+
+* **Phenomenon Allowed:** **Dirty Reads**.
+* **Example:**
+  * **Transaction A** updates a user's balance from \$100 to \$500 but hasn't clicked "confirm" yet.
+  * **Transaction B** reads the balance and sees \$500.
+  * **Transaction A** hits an error and performs a `ROLLBACK`.
+  * **Result:** Transaction B is now acting on \$500—a value that technically never existed in the database.
+
+## 2. Read Committed
+Guarantees that any data read has been committed at the moment it is read. This is the default level for many modern databases (e.g., PostgreSQL).
+
+* **Phenomenon Allowed:** **Non-repeatable Reads**.
+* **Example:**
+  * **Transaction A** reads an item price: **\$50**.
+  * **Transaction B** updates the price to **\$60** and `COMMIT`s.
+  * **Transaction A** reads the same item price again.
+  * **Result:** Within the same transaction, the price changed from \$50 to \$60.
+
+
+
+## 3. Repeatable Read
+Ensures that if a transaction reads data once, it will see the exact same values if it reads that data again, even if other transactions commit changes in the meantime.
+
+* **Phenomenon Allowed:** **Phantom Reads**.
+* **Example:**
+  * **Transaction A** queries: `SELECT * FROM Users WHERE age > 25`. It finds 3 rows.
+  * **Transaction B** inserts a **new** user aged 30 and `COMMIT`s.
+  * **Transaction A** runs the same query again.
+  * **Result:** Transaction A now sees 4 rows. The original 3 stayed the same (repeatable), but a "phantom" row appeared.
+
+## 4. Serializable
+The highest level of isolation. It ensures the execution of transactions yields the same result as if they were executed one after another, sequentially.
+
+* **Phenomenon Allowed:** **None**.
+* **Example:**
+  * Two users try to claim the last remaining ticket for a concert simultaneously.
+  * The system places them in a virtual queue.
+  * **Result:** One transaction is allowed to complete; the second is rejected or forced to retry because the "serial" state of the database changed after the first transaction finished.
+
+---
+
+> **Note:** In distributed systems, achieving **Serializable** isolation often involves techniques like Two-Phase Locking (2PL) or Optimistic Concurrency Control (OCC), which can increase latency due to network coordination.
 
 ---
 
