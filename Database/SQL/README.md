@@ -93,7 +93,7 @@ In distributed SQL environments, **isolation levels** determine how and when the
 
 ---
 
-## 1. Read Uncommitted
+## 1. Read Uncommitted: "No Read Locks"
 The lowest isolation level. Transactions can see data changes made by other concurrent transactions even before they are committed.
 
 * **Phenomenon Allowed:** **Dirty Reads**.
@@ -103,7 +103,13 @@ The lowest isolation level. Transactions can see data changes made by other conc
   * **Transaction A** hits an error and performs a `ROLLBACK`.
   * **Result:** Transaction B is now acting on \$500—a value that technically never existed in the database.
 
-## 2. Read Committed
+This level prioritizes speed over consistency. It effectively ignores the locking state of other transactions for read operations.
+
+* **Read Strategy:** Transactions perform reads without requesting any locks. They can read data even if another transaction holds an **Exclusive (X)** lock on it.
+* **Write Strategy:** Standard **Exclusive (X)** locks are held on modified rows until the transaction completes to prevent lost updates, but they do not block other readers.
+* **Outcome:** High performance, but allows **Dirty Reads**.
+* 
+## 2. Read Committed: "Short-Lived Read Locks"
 Guarantees that any data read has been committed at the moment it is read. This is the default level for many modern databases (e.g., PostgreSQL).
 
 * **Phenomenon Allowed:** **Non-repeatable Reads**.
@@ -113,9 +119,13 @@ Guarantees that any data read has been committed at the moment it is read. This 
   * **Transaction A** reads the same item price again.
   * **Result:** Within the same transaction, the price changed from \$50 to \$60.
 
+This is a compromise level where you only see finalized data, but the data can change within a single session.
 
+* **Read Strategy:** The transaction acquires a **Shared (S)** lock before reading a row but **releases it immediately** after the read operation is finished.
+* **Write Strategy:** Acquires an **Exclusive (X)** lock that is held until the transaction is `COMMIT`ted or `ROLLBACK`ed.
+* **Outcome:** Prevents dirty reads, but allows **Non-repeatable Reads** because the read lock is gone before the transaction ends.
 
-## 3. Repeatable Read
+## 3. Repeatable Read: "Long-Lived Read Locks"
 Ensures that if a transaction reads data once, it will see the exact same values if it reads that data again, even if other transactions commit changes in the meantime.
 
 * **Phenomenon Allowed:** **Phantom Reads**.
@@ -125,7 +135,14 @@ Ensures that if a transaction reads data once, it will see the exact same values
   * **Transaction A** runs the same query again.
   * **Result:** Transaction A now sees 4 rows. The original 3 stayed the same (repeatable), but a "phantom" row appeared.
 
-## 4. Serializable
+This level ensures that data stays the same for the duration of your transaction by "holding onto" the rows you've touched.
+
+* **Read Strategy:** The transaction acquires **Shared (S)** locks on all rows it reads and **holds them until the transaction finishes**.
+* **Write Strategy:** Acquires **Exclusive (X)** locks and holds them until the transaction finishes.
+* **Outcome:** Since the read lock is held, other transactions are blocked from updating those rows. However, they can still insert *new* rows, leading to **Phantom Reads**.
+
+
+## 4. Serializable: "Range & Index Locking"
 The highest level of isolation. It ensures the execution of transactions yields the same result as if they were executed one after another, sequentially.
 
 * **Phenomenon Allowed:** **None**.
@@ -133,6 +150,23 @@ The highest level of isolation. It ensures the execution of transactions yields 
   * Two users try to claim the last remaining ticket for a concert simultaneously.
   * The system places them in a virtual queue.
   * **Result:** One transaction is allowed to complete; the second is rejected or forced to retry because the "serial" state of the database changed after the first transaction finished.
+
+The most restrictive level. It prevents other transactions from modifying data *and* from adding new data that would fall into the range of your query.
+
+* **Read/Write Strategy:** Holds all locks (S and X) until the transaction finishes.
+* **Gap/Range Locking:** The database locks the "gaps" between index entries.
+  * *Example:* If you query `WHERE ID BETWEEN 10 AND 20`, the DB locks the range. A second transaction trying to `INSERT` an ID of 15 will be blocked.
+* **Outcome:** Complete isolation. In distributed systems, this is often handled via **Optimistic Concurrency Control (OCC)** or **Snapshot Isolation** with a validation phase to reduce the performance hit of heavy locking.
+
+---
+### Locking Summary Table
+
+| Isolation Level | Read Lock Duration | Write Lock Duration | Prevents Phantoms? |
+| :--- | :--- | :--- | :--- |
+| **Read Uncommitted** | None | Until Commit/Rollback | No |
+| **Read Committed** | Instant (released after read) | Until Commit/Rollback | No |
+| **Repeatable Read** | Until Commit/Rollback | Until Commit/Rollback | No |
+| **Serializable** | Until Commit/Rollback | Until Commit/Rollback | **Yes** |
 
 ---
 
