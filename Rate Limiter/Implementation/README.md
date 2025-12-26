@@ -171,6 +171,64 @@ http {
 
 ---
 
+In high-scale distributed systems, coordination is key. While high-performance stores like Redis handle the actual request counters, **ZooKeeper** and **etcd** serve as the **Control Plane** to ensure consistency and reliability across the cluster.
+
+---
+
+## Core Architectural Roles
+
+### 1. Dynamic Configuration Management
+Instead of hardcoding rate limits or requiring a service restart to update a policy, these tools act as a "Source of Truth."
+
+* **The Watch Pattern:** API Gateways subscribe to specific keys (e.g., `/config/rate-limits/tier-1`).
+* **Real-time Updates:** When a limit is changed in the coordination layer, a notification is pushed to all gateway nodes, which update their local memory instantly.
+
+
+
+### 2. Capacity Partitioning (Lease-Based)
+For strict global limits (e.g., protecting a legacy database), capacity is distributed as "leases."
+
+* **Mechanism:** A total limit of 1,000 req/sec is split into chunks.
+* **Leasing:** A node claims a lease for a chunk (e.g., 100 req/sec). If the node crashes, the lease expires in ZooKeeper/etcd, and the capacity is returned to the pool for other nodes to claim.
+
+### 3. Leader Election for Aggregation
+In "Eventually Consistent" models, local hits are aggregated centrally.
+
+* **Fault Tolerance:** ZooKeeper/etcd ensures only one "Leader" is responsible for summing global traffic at any given time.
+* **Failover:** If the leader goes offline, a new one is elected within milliseconds, ensuring the rate limiter remains operational.
+
+---
+
+## Technology Comparison
+
+| Feature | ZooKeeper | etcd |
+| :--- | :--- | :--- |
+| **Consistency Protocol** | ZAB (Zookeeper Atomic Broadcast) | Raft |
+| **Data Model** | Hierarchical (znodes) | Key-Value Store |
+| **Watch Mechanism** | One-time trigger (requires reset) | Continuous event stream |
+| **Cloud Native** | Heavyweight, Java-based | Lightweight, Go-based (K8s native) |
+
+---
+
+## Why avoid using them for Request Counters?
+While these tools are highly consistent, they require a **Consensus Quorum** (a majority of nodes must agree) for every write.
+
+1.  **Latency:** Every increment would require network round-trips between coordination nodes.
+2.  **Throughput:** They are designed for "low-volume, high-criticality" data, not the millions of increments per second required by global rate limiters.
+
+> **Recommendation:** Use **Redis** for the "Data Plane" (counters) and **etcd/ZooKeeper** for the "Control Plane" (rules and coordination).
+
+---
+
+## Implementation Example (Mock Config Watch)
+
+```yaml
+# Example etcd key-value structure for rate limits
+/services/api-gateway/limits/default: "500"
+/services/api-gateway/limits/premium: "5000"
+/services/api-gateway/status: "active"
+```
+
 ## 🧠 Part 5: Senior Level Q&A Scenarios
 
 ### Scenario A: Headers & UX
