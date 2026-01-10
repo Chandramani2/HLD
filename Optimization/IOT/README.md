@@ -396,3 +396,105 @@ try (Connection conn = connectionPool.getConnection()) {
     // to the pool immediately for the next of the 2M requests.
 }
 ```
+
+# Database Connection Management (HikariCP)
+
+This section explains how to manage the relationship between high-concurrency Java threads and a limited SQL database capacity to prevent "Connection Refused" errors and system crashes.
+
+---
+
+## 1. The Relationship: Java Threads vs. SQL Connections
+
+At 2M RPS, your Java application uses thousands of threads to handle incoming network traffic. However, a SQL Database (MySQL/Postgres) cannot handle thousands of simultaneous active connections.
+
+* **Threads are "Cheap":** You can have 5,000+ threads in Java.
+* **Connections are "Expensive":** Each connection consumes RAM and CPU on the DB server.
+* **The Conflict:** If every thread opens its own connection, the Database will crash. If threads share one connection without management, data gets corrupted.
+
+
+
+---
+
+## 2. What is HikariCP?
+
+**HikariCP** is a high-performance "Connection Pool." It acts as a middleman that manages a small "fleet" of pre-opened database connections.
+
+### Key Functions:
+1. **Connection Recycling:** Instead of opening/closing a TCP connection for every sensor request, threads "borrow" an existing one and return it in microseconds.
+2. **Backpressure Control:** It limits the number of concurrent queries hitting the DB, preventing the "Thunderous Herd" problem.
+3. **Liveness Testing:** It automatically detects and replaces "dead" connections before your application tries to use them.
+
+---
+
+## 3. Implementation in Java
+
+Incorporate HikariCP into your **Consumer Service** to handle bulk inserts efficiently.
+
+### Configuration Strategy
+For a high-volume IoT system, "Less is More." A small pool of 50-100 connections is often faster than a pool of 1,000 because it reduces CPU context switching on the database server.
+
+```java
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+
+public class DatabaseManager {
+    private static HikariDataSource dataSource;
+
+    static {
+        HikariConfig config = new HikariConfig();
+        config.setJdbcUrl("jdbc:mysql://db-server:3306/iot_data");
+        config.setUsername("admin");
+        config.setPassword("secure_password");
+
+        // PERFORMANCE TUNING
+        config.setMaximumPoolSize(100);       // Max real connections to DB
+        config.setMinimumIdle(10);            // Minimum idle connections kept ready
+        config.setConnectionTimeout(30000);   // Wait 30s for a connection before failing
+        config.setIdleTimeout(600000);        // 10 minutes
+        
+        // MYSQL SPECIFIC OPTIMIZATIONS
+        config.addDataSourceProperty("cachePrepStmts", "true");
+        config.addDataSourceProperty("prepStmtCacheSize", "250");
+        config.addDataSourceProperty("prepStmtCacheSqlLimit", "2048");
+
+        dataSource = new HikariDataSource(config);
+    }
+
+    public void saveTemperature(String deviceId, double value) {
+        // "try-with-resources" automatically returns the connection to the pool
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement("INSERT INTO sensor_data (device_id, temp) VALUES (?, ?)")) {
+            
+            ps.setString(1, deviceId);
+            ps.setDouble(2, value);
+            ps.executeUpdate();
+            
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+}
+```
+
+## 5. Summary of Benefits
+
+Integrating a connection pooler like **HikariCP** into your high-volume IoT architecture provides the following advantages:
+
+| Feature | Without HikariCP | With HikariCP |
+| :--- | :--- | :--- |
+| **Connection Speed** | **Slow:** Every request performs a new TCP handshake. | **Instant:** Reuses pre-warmed, existing connections. |
+| **DB Stability** | **High Risk:** Sudden spikes cause "Too many connections" crashes. | **Safe:** Limits total connections to a level the DB can actually handle. |
+| **Resource Usage** | **Wasteful:** Constant process creation/destruction on the DB server. | **Optimized:** Fixed CPU/RAM overhead for connection management. |
+| **Data Integrity** | **Manual:** High risk of "Connection Leaks" if code is not perfect. | **Automatic:** Features leak detection and automatic resource reclamation. |
+
+---
+
+## 6. How it solves the "Jitter" and Data Loss
+
+By combining **Java Multithreading** with **HikariCP**, we create a system that can absorb massive bursts of data without dropping connections:
+
+* **Non-Blocking Ingress:** Java threads handle the 2M incoming POST requests from sensors immediately.
+* **Request Queueing:** If the database is momentarily busy, HikariCP manages the "wait list" in memory rather than letting the TCP connection time out.
+* **Thread Efficiency:** Because threads spend less time waiting for a new connection to open, they can return to the Kafka queue faster to pick up the next batch of temperature data.
